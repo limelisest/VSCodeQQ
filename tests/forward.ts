@@ -36,6 +36,13 @@ test('转发阅读兼容消息数组和 node 内容，重复或缺失 ID 保持�
   assert.throws(() => parseForwardMessages({ messages: [null] }, 'private:1'), /无效/);
   assert.throws(() => parseForwardMessages({ messages: Array(501).fill({}) }, 'private:1'), /500/);
 });
+test('空 message 数组不遮蔽有效的转发 content，空 messages 不遮蔽 message', () => {
+  const node = { type: 'node', data: { user_id: 2, message: [], content: [{ type: 'text', data: { text: '真实正文' } }] } };
+  for (const response of [{ messages: [node] }, { messages: [], message: [node] }]) {
+    assert.equal(messageText(parseForwardMessages(response, 'group:1')[0]), '真实正文');
+  }
+});
+
 test('单条和合并转发使用目标类型及原始消息引用，拒绝未发送和撤回消息', () => {
   const messages = [1, 2].map(message_id => parseMessage({ message_id, user_id: 3, message: 'test' }, 'group:1'));
   for (const type of ['group', 'private'] as const) {

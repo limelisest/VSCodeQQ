@@ -25,6 +25,11 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     const stamp = Number.isFinite(date.getTime())
       ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
       : '----/--/-- --:--:--';
+    if (m.systemNotice) {
+      rendered.messages.set(lines.length, m.id);
+      lines.push(`${style.comment} ${stamp} · 文件传输：${inline(m.systemNotice)}`, '');
+      continue;
+    }
     const self = m.senderId === selfId;
     const target = m.replyId ? byId.get(m.replyId) : undefined;
     const tags = [self ? '我' : '', m.senderRole === 'owner' ? '群主' : m.senderRole === 'admin' ? '管理员' : '', !self && m.mentioned ? '@我' : '', !self && (m.replyToSelf || target?.senderId === selfId) ? '回复我' : ''].filter(Boolean);

@@ -14,6 +14,7 @@ import { ChatTabs } from './chatTabs';
 import { EmojiPicker } from './emojiPicker';
 import { EmojiCompletion } from './emojiCompletion';
 import { ForwardController } from './forwardController';
+import { fileTransferNotice } from './fileNotices';
 import { SlashCommands, SlashInvocation } from './slashCommands';
 import { availableSlashCommands, exactSlashCommand } from './slashCatalog';
 import { boundReplies, outgoingReply } from './replies';
@@ -358,6 +359,13 @@ export class QQApp implements vscode.Disposable {
   private onEvent(event: any): void {
     const store = this.store;
     if (!store || event.self_id && id(event.self_id) !== store.selfId) return;
+    const transferNotice = fileTransferNotice(event, store.selfId);
+    if (transferNotice) {
+      if (!store.chats.has(transferNotice.chatKey)) store.upsert(newChat('private', event.peer_id, event.peer_id));
+      store.add(transferNotice, false);
+      this.editor.incoming(transferNotice.chatKey);
+      return;
+    }
     if (event.post_type === 'request') { this.slash.requests.add(event, store.selfId); return; }
     if (event.post_type === 'notice' && ['group_recall', 'friend_recall'].includes(event.notice_type)) {
       const key = event.notice_type === 'group_recall' ? `group:${id(event.group_id)}` : `private:${id(event.user_id)}`;

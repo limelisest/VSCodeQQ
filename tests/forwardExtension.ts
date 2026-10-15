@@ -9,9 +9,13 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
   const key = 'group:20002';
   await app.openChat(key);
   let editor = vscode.window.activeTextEditor!;
-  for (const message_id of [99020, 99021]) app.store!.add(parseMessage({ message_id, user_id: 10001, message: [
-    { type: 'text', data: { text: `forward-probe-${message_id}` } }, { type: 'forward', data: { id: 'root-forward' } }
-  ] }, key, app.store!.selfId), false);
+  for (const message_id of [99020, 99021]) {
+    const raw = { message_id, user_id: 10001, message: [
+      { type: 'text', data: { text: `forward-probe-${message_id}` } }, { type: 'forward', data: { id: 'root-forward' } }
+    ] };
+    backend.sentMessages.set(message_id, raw);
+    app.store!.add(parseMessage(raw, key, app.store!.selfId), false);
+  }
   app.store!.setDraft(key, '转发期间保留草稿');
   await app.native.sync(editor);
   await until(() => !app.native.isUpdating(editor.document));
@@ -20,7 +24,19 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
   const links = await vscode.commands.executeCommand<vscode.DocumentLink[]>('vscode.executeLinkProvider', editor.document.uri);
   const forward = links.find(l => l.target?.path === 'qq.openForward')!;
   assert.ok(forward);
-  await vscode.commands.executeCommand('qq.openForward', ...JSON.parse(decodeURIComponent(forward.target!.query)));
+  const forwardArgs = JSON.parse(decodeURIComponent(forward.target!.query));
+  const readers = () => vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputText && tab.input.uri.scheme === 'qq-forward');
+  const beforeReaders = readers().length;
+  const beforeReads = backend.calls.filter(c => c.action === 'get_forward_msg').length;
+  // The native link and delayed single-click handler may overlap on Ctrl-click.
+  backend.forwardDelay = 400;
+  try {
+    const firstOpen = vscode.commands.executeCommand('qq.openForward', ...forwardArgs);
+    await new Promise(resolve => setTimeout(resolve, 250));
+    await Promise.all([firstOpen, vscode.commands.executeCommand('qq.openForward', ...forwardArgs)]);
+  } finally { backend.forwardDelay = 0; }
+  assert.equal(readers().length - beforeReaders, 1, '同一条转发的并发打开只能产生一个标签');
+  assert.equal(backend.calls.filter(c => c.action === 'get_forward_msg').length - beforeReads, 1, '并发打开应复用同一次读取');
   const doc = vscode.window.activeTextEditor!.document;
   assert.equal(doc.uri.scheme, 'qq-forward');
   assert.ok(doc.getText().includes('合并转发正文'));
@@ -34,8 +50,17 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
   const hovers = await vscode.commands.executeCommand<vscode.Hover[]>('vscode.executeHoverProvider', doc.uri, image.range.start);
   assert.ok(hovers.some(h => h.contents.some(c => c instanceof vscode.MarkdownString && c.value.includes('<img'))));
   const nested = nestedLinks.find(l => l.target?.path === 'qq.openForward')!;
+  const readsBeforeNested = backend.calls.filter(c => c.action === 'get_forward_msg').length;
   await vscode.commands.executeCommand('qq.openForward', ...JSON.parse(decodeURIComponent(nested.target!.query)));
   assert.ok(vscode.window.activeTextEditor!.document.getText().includes('嵌套转发正文'));
+  assert.equal(backend.calls.filter(c => c.action === 'get_forward_msg').length - readsBeforeNested, 1, '空 content 必须继续查询内层正文');
+  const nestedTabs = readers().length;
+  backend.forwardResults.set('nested-forward', { messages: [] });
+  try {
+    const [source, nestedMessage, nestedIndex] = JSON.parse(decodeURIComponent(nested.target!.query));
+    await assert.rejects(app.forwards.open(source, nestedMessage, nestedIndex), /NapCat 无法读取/);
+    assert.equal(readers().length, nestedTabs, '内层查询为空必须报错，不能打开空白阅读页');
+  } finally { backend.forwardResults.delete('nested-forward'); }
   assert.equal(app.store!.messages.get(key)?.some(m => m.id.startsWith('forward:')), false);
   assert.deepEqual(app.store!.draft(key), draft);
   app.store!.add(parseMessage({ message_id: 99022, message: [{ type: 'forward', data: { id: 'unqueryable', content: [{ sender: { user_id: 10001, nickname: '内嵌发送者' }, message: '内嵌正文' }] } }] }, key), false);
@@ -66,10 +91,18 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
     await assert.rejects(app.forwards.open(editor.document.uri.toString(), '99022', 0), /NapCat 无法读取这条合并转发.*QQ 转发诊断/);
   } finally { backend.rejectedForwardIds.clear(); }
 
+  backend.forwardResults.set('old-id', { messages: [] });
+  try {
+    await app.forwards.open(editor.document.uri.toString(), '99022', 0);
+    assert.ok(vscode.window.activeTextEditor!.document.getText().includes('合并转发正文'), '空响应仍应尝试通过原消息恢复正文');
+  } finally { backend.forwardResults.delete('old-id'); }
+  checks.push('空内嵌数组继续查询嵌套正文，空响应尝试恢复或明确报错，避免空白窗口');
+
   checks.push('合并转发链接打开只读代码文档、发送者和正文可读、图片悬浮、嵌套转发且不污染会话');
   await app.openChat(key);
   editor = vscode.window.activeTextEditor!;
   await until(() => !app.native.isUpdating(editor.document));
+  checks.push('间隔 250ms 重复触发合并转发打开命令，只读取一次并打开一个标签');
   const line = app.transcript!.rendered.get(key)!.starts.get('99020')!;
   editor.selection = new vscode.Selection(line, 0, line, 0);
   const single = vscode.commands.executeCommand('qq.forwardMessage');
