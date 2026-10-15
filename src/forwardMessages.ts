@@ -1,9 +1,15 @@
 import { Message, Chat, parseMessage } from './model';
 
+export function forwardNodes(data: unknown): unknown[] | undefined {
+  const value = data as { messages?: unknown; message?: unknown } | null;
+  if (Array.isArray(value?.messages) && value.messages.length) return value.messages;
+  if (Array.isArray(value?.message)) return value.message;
+  return Array.isArray(value?.messages) ? value.messages : undefined;
+}
+
 // Forward nodes do not necessarily have a message ID, and repeated IDs are valid.
 export function parseForwardMessages(data: unknown, key: string): Message[] {
-  const value = data as { messages?: unknown; message?: unknown } | null;
-  const nodes = value?.messages ?? value?.message;
+  const nodes = forwardNodes(data);
   if (!Array.isArray(nodes)) throw new Error('NapCat 未返回有效的合并转发内容');
   if (nodes.length > 500) throw new Error('合并转发超过 500 条，请在 QQ 中查看');
   const parsed = nodes.map(value => {
@@ -11,7 +17,8 @@ export function parseForwardMessages(data: unknown, key: string): Message[] {
     const raw = value as Record<string, any>;
     const node = raw.type === 'node' ? raw.data : raw;
     if (!node || typeof node !== 'object') throw new Error('合并转发包含无效节点');
-    const message = parseMessage({ ...node, message: node.message ?? node.content,
+    const body = Array.isArray(node.message) && !node.message.length && Array.isArray(node.content) && node.content.length ? node.content : node.message ?? node.content;
+    const message = parseMessage({ ...node, message: body,
       sender: node.sender ?? { user_id: node.user_id ?? node.uin, nickname: node.nickname ?? node.name } }, key);
     return message;
   });

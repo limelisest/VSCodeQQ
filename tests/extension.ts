@@ -7,6 +7,8 @@ import { MockNapCat, png, tallPng, widePng, until } from './fixture';
 import { DRAFT_DIVIDER } from '../src/nativeEditor';
 import { TestUI } from './ui';
 import { testForwardCommands } from './forwardExtension';
+import { testFileNotices } from './fileNoticeExtension';
+import { testOperationLocks } from './operationExtension';
 import { testSlashCommands } from './slashExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
 import { testReplyPlaceholder } from './replyExtension';
@@ -58,6 +60,8 @@ export async function run(): Promise<void> {
       ui = await TestUI.connect();
       await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testFileNotices(app, backend, checks);
+      await testOperationLocks(app, backend, ui, checks);
       await testForwardCommands(app, backend, ui, checks);
       console.log(`QQ forward integration: ${checks.length} checks passed`);
       return;
@@ -1039,6 +1043,8 @@ export async function run(): Promise<void> {
     checks.push('搜索后 Enter 打开正确会话并清空搜索返回完整列表，方向键选择和收纳箱搜索同样生效');
     await testReplyPlaceholder(app, backend, checks);
     await testEmojiShortcuts(app, backend, ui, checks);
+    await testFileNotices(app, backend, checks);
+    await testOperationLocks(app, backend, ui, checks);
     await testForwardCommands(app, backend, ui, checks);
     console.log('Forward integration: passed');
     await testSlashCommands(app, backend, ui, checks);

@@ -10,14 +10,14 @@ import { Rendered, renderTranscript } from './transcriptRenderer';
 import { configuredCodeLanguage } from './configuration';
 import { imagePreviewMarkup } from './imageHover';
 import { deliverForward } from './forwardDelivery';
-import { parseForwardMessages } from './forwardMessages';
+import { forwardNodes, parseForwardMessages } from './forwardMessages';
 interface Host { store?: ChatStore; transcript?: Transcript; target?: string; session: AccountSession; client: OneBotClient; ready: boolean; }
 interface Page { messages: Message[]; rendered: Rendered; key: string; account: string; }
 export class ForwardController implements vscode.Disposable {
   private pages = new Map<string, Page>();
   private changed = new vscode.EventEmitter<vscode.Uri>();
   private disposables: vscode.Disposable[];
-  private forwarding = false;
+  private opening = new Map<string, Promise<void>>();
   private output = vscode.window.createOutputChannel('QQ 转发诊断');
   constructor(private host: Host) {
     const selector = { scheme: 'qq-forward' };
@@ -79,9 +79,7 @@ export class ForwardController implements vscode.Disposable {
     });
   }
   async forward(merged = false): Promise<void> {
-    if (this.forwarding) return;
-    this.forwarding = true;
-    try {
+    return this.host.session.run('forward-send', async () => {
       const { store, chat, check } = this.context();
       const editor = vscode.window.activeTextEditor;
       const current = editor && this.host.transcript?.messageAt(editor.document.uri, editor.selection.active.line);
@@ -106,9 +104,12 @@ export class ForwardController implements vscode.Disposable {
         return deliverForward(this.host, target.value, latest as Message[], merged, error => this.output.appendLine(String(error)));
       });
       check(); void vscode.window.showInformationMessage(`已转发到 ${target.value.name}`);
-    } finally { this.forwarding = false; }
+    });
   }
   async view(): Promise<void> {
+    return this.host.session.run('forward-view', () => this.viewOnce());
+  }
+  private async viewOnce(): Promise<void> {
     const { uri, check } = this.context();
     if (!uri) return;
     const options = this.sourceMessages(uri).flatMap(m => m.segments.filter(s => s.type === 'forward').map((s, index) => ({ label: `${m.senderName}：合并转发`, description: m.id, messageId: m.id, index })));
@@ -120,17 +121,35 @@ export class ForwardController implements vscode.Disposable {
   }
   async open(source: string, messageId: string, index: number): Promise<void> {
     if (typeof source !== 'string' || typeof messageId !== 'string' || !Number.isInteger(index) || index < 0) return;
+    // Ctrl/Cmd-click can also fire the transcript's ordinary click handler.
+    // Both gestures must share one request and one readonly editor.
+    const key = JSON.stringify([this.host.session.generation, source, messageId, index]);
+    const existing = this.opening.get(key);
+    if (existing) return existing;
+    const task = this.openOnce(source, messageId, index);
+    this.opening.set(key, task);
+    try { await task; }
+    finally { if (this.opening.get(key) === task) this.opening.delete(key); }
+  }
+  private async openOnce(source: string, messageId: string, index: number): Promise<void> {
     const uri = vscode.Uri.parse(source), message = this.sourceMessages(uri).find(m => m.id === messageId);
     const segment = message?.segments.filter(s => s.type === 'forward')[index];
-    if (!segment || segment.type !== 'forward' || (!segment.id && !segment.content)) throw new Error('合并转发 ID 缺失或消息已失效，请重新加载历史');
+    if (!segment || segment.type !== 'forward' || (!segment.id && !segment.content?.length)) throw new Error('合并转发 ID 缺失或消息已失效，请重新加载历史');
     await this.load(source, segment.id, segment.content, messageId, index);
   }
   private async load(source: string, id: string, content?: unknown[], messageId?: string, index = 0): Promise<void> {
     const { store, chat, check } = this.context(source);
+    const read = async (candidate: string) => {
+      check();
+      const result = await this.host.client.call('get_forward_msg', { message_id: candidate });
+      check();
+      if (!forwardNodes(result)?.length) throw new OneBotRequestError('rejected', 'NapCat 返回了空的合并转发内容');
+      return result;
+    };
     const data = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在读取合并转发' }, async () => {
       this.output.appendLine(`[${new Date().toISOString()}] 读取合并转发：ID类型=${/^-?\d+$/.test(id) ? '数字' : '资源ID'}，内嵌条数=${content?.length ?? '无'}，来源=${vscode.Uri.parse(source).scheme}`);
-      if (content) return { messages: content };
-      try { return await this.host.client.call('get_forward_msg', { message_id: id }); }
+      if (content?.length) return { messages: content };
+      try { return await read(id); }
       catch (error) {
         this.output.appendLine(`初次查询失败：${error instanceof Error ? error.message : String(error)}`);
         check();
@@ -142,7 +161,7 @@ export class ForwardController implements vscode.Disposable {
         const refreshed = parseMessage(raw, chat.key).segments.filter(s => s.type === 'forward')[index];
         this.output.appendLine(`刷新结果：转发段=${refreshed?.type === 'forward'}，内嵌条数=${refreshed?.type === 'forward' ? refreshed.content?.length ?? '无' : '无'}，ID变化=${refreshed?.type === 'forward' && refreshed.id !== id}`);
         if (refreshed?.type !== 'forward') throw error;
-        if (refreshed.content) return { messages: refreshed.content };
+        if (refreshed.content?.length) return { messages: refreshed.content };
         const alternatives = [...new Set([
           ...(refreshed.id && refreshed.id !== id ? [refreshed.id] : []),
           // NapCat can resolve a top-level forward through the original message's
@@ -155,7 +174,7 @@ export class ForwardController implements vscode.Disposable {
           const route = candidate === messageId ? '原消息 ID' : '刷新后的资源 ID';
           this.output.appendLine(`尝试通过${route}读取 get_forward_msg`);
           try {
-            const result = await this.host.client.call('get_forward_msg', { message_id: candidate });
+            const result = await read(candidate);
             check();
             this.output.appendLine(`${route}读取成功`);
             return result;
@@ -196,6 +215,6 @@ export class ForwardController implements vscode.Disposable {
     const file = await this.image(vscode.Uri.parse(source), messageId, index); check();
     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
   }
-  clear(): void { for (const uri of this.pages.keys()) { this.pages.delete(uri); this.changed.fire(vscode.Uri.parse(uri)); } }
+  clear(): void { this.opening.clear(); for (const uri of this.pages.keys()) { this.pages.delete(uri); this.changed.fire(vscode.Uri.parse(uri)); } }
   dispose(): void { this.clear(); this.disposables.forEach(d => d.dispose()); }
 }

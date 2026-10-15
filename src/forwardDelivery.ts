@@ -4,6 +4,7 @@ import { ChatStore } from './store';
 import { OneBotClient, OneBotRequestError } from './onebot';
 import { Chat, Message, id, parseMessage } from './model';
 import { forwardRequest } from './forwardMessages';
+import { ensureForwardSources } from './forwardSources';
 
 interface Host { store?: ChatStore; session: AccountSession; ready: boolean; client: Pick<OneBotClient, 'call'>; }
 // Forwarding owns a delivery record, never a conversation's draft or its attachments.
@@ -32,6 +33,11 @@ export async function deliverForward(host: Host, target: Chat, messages: Message
   store!.add(local, false);
   try {
     await store!.flush(); check();
+    if (merged) await ensureForwardSources(host.client, messages, check);
+    check();
+    // Readonly recovery may take time; revalidate recalls before submission.
+    const latest = messages.map(message => store!.messages.get(message.chatKey)?.find(value => value.id === message.id) ?? message);
+    if (latest.some(message => message.recalled)) throw new Error('来源消息已被撤回，请重新选择');
     requested = true;
     const result = await host.client.call(request.action, request.params);
     check();

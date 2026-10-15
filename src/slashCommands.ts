@@ -22,7 +22,6 @@ export class SlashCommands implements vscode.Disposable {
   private results = new Map<string, string>();
   private sensitive = new Set<string>();
   private changed = new vscode.EventEmitter<vscode.Uri>();
-  private busy = new Set<string>();
   private subscriptions: vscode.Disposable[];
   constructor(private host: SlashHost) {
     this.subscriptions = [this.changed, vscode.workspace.registerTextDocumentContentProvider('qq-result', {
@@ -46,58 +45,59 @@ export class SlashCommands implements vscode.Disposable {
     if (!store || !chat || (invocation && (invocation.account !== store.selfId || invocation.generation !== token.generation || active?.document.uri.toString() !== invocation.uri))) throw new Error('会话或连接已变化，请在聊天草稿中重新选择指令');
     const check = () => { if (!token.current() || this.host.store !== store || !store.chats.has(chat.key)) throw new Error('账号或连接已变化，操作已停止，请重新选择指令'); };
     if (!name || name === 'help') {
-      const chosen = await vscode.window.showQuickPick(availableSlashCommands(chat.type).filter(c => c.name !== 'help').map(c => ({ label: '/' + c.name, description: c.description, detail: c.category, value: c.name })), { title: `QQ 指令 · ${chat.name}`, placeHolder: '输入英文指令或中文说明搜索', matchOnDescription: true, matchOnDetail: true });
-      check(); if (chosen) await this.run(chosen.value, invocation); return;
+      return this.host.session.run(JSON.stringify(['slash-menu', chat.key]), async () => {
+        const chosen = await vscode.window.showQuickPick(availableSlashCommands(chat.type).filter(c => c.name !== 'help').map(c => ({ label: '/' + c.name, description: c.description, detail: c.category, value: c.name })), { title: `QQ 指令 · ${chat.name}`, placeHolder: '输入英文指令或中文说明搜索', matchOnDescription: true, matchOnDetail: true });
+        check(); if (chosen) await this.run(chosen.value, invocation); return;
+      });
     }
     const command = slashCommands.find(c => c.name === name && (!c.scope || c.scope === chat.type));
     if (!command) throw new Error('当前会话没有此指令：/' + name);
-    const operation = `${store.selfId}:${chat.key}:${name}`;
-    if (this.busy.has(operation)) return;
-    this.busy.add(operation);
-    const context: SlashContext = { key: chat.key, id: chat.id, type: chat.type, name: chat.name, selfId: store.selfId };
-    let requested = false;
-    const online = () => { check(); if (!this.host.ready || !this.host.client.connected) throw new Error('请先连接 NapCat，再使用 /' + name); };
-    const call = async (action: string, params: Record<string, unknown>) => {
-      online();
-      const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `QQ · ${command.description}`, cancellable: false }, () => { online(); requested = true; return this.host.client.call(action, params); });
-      check(); return result;
-    };
-    try {
-      check(); this.host.target = chat.key;
-      if (command.local) { await vscode.commands.executeCommand(command.local, ...(['qq.toggleFavorite', 'qq.toggleCollapsed', 'qq.markRead', 'qq.toggleIgnoreUnread'].includes(command.local) ? [chat.key] : [])); return; }
-      if (command.special === 'reply') {
-        const value = await this.askMessage(store, chat, check); check();
-        if (value && uri) await vscode.commands.executeCommand('qq.reply', uri.toString(), value); return;
-      }
-      online();
-      if (command.special === 'requests') { await this.handleRequests(store, chat, check, call); return; }
-      if (command.special === 'files') { await this.browseFiles(chat, check, call); return; }
-      if (command.special === 'poke') {
-        const target = chat.type === 'private' ? chat.id : await this.askUser(store, chat, check); check();
-        if (target && await this.confirm(command, context, { user_id: target })) await call(chat.type === 'group' ? 'group_poke' : 'friend_poke', { ...(chat.type === 'group' ? { group_id: chat.id } : {}), user_id: target });
-        return;
-      }
-      await executeSlashApi(command, context, {
-        check: online,
-        ask: field => field.kind === 'user' ? this.askUser(store, chat, check) : field.kind === 'message' ? this.askMessage(store, chat, check) : this.askField(field, name),
-        confirm: (command, context, params) => this.confirm(command, context, params),
-        call,
-        result: async (command, result, params) => {
-          if (command.mutation) {
-            // Update local projections only after the backend confirms success.
-            if (name === 'recall') store.recall(chat.key, String(params.message_id));
-            if (['card', 'title', 'admin', 'unadmin', 'kick'].includes(name)) { this.host.session.memberLoaded.delete(chat.key); await this.host.loadMembers(chat.key); check(); }
-            if (name === 'rename') store.upsert({ ...chat, name: String(params.group_name) });
-            if (name === 'friend_remark') store.upsert({ ...chat, name: String(params.remark) || chat.nickname || chat.id, remark: String(params.remark) });
-            if (name === 'group_remark') store.upsert({ ...chat, remark: String(params.remark) });
-            void vscode.window.showInformationMessage(`QQ · ${command.description}：操作成功`);
-          } else await this.showResult(command, result, check);
+    return this.host.session.run(JSON.stringify(['slash', name === 'requests' ? store.selfId : chat.key, name]), async () => {
+      const context: SlashContext = { key: chat.key, id: chat.id, type: chat.type, name: chat.name, selfId: store.selfId };
+      let requested = false;
+      const online = () => { check(); if (!this.host.ready || !this.host.client.connected) throw new Error('请先连接 NapCat，再使用 /' + name); };
+      const call = async (action: string, params: Record<string, unknown>) => {
+        online();
+        const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `QQ · ${command.description}`, cancellable: false }, () => { online(); requested = true; return this.host.client.call(action, params); });
+        check(); return result;
+      };
+      try {
+        check(); this.host.target = chat.key;
+        if (command.local) { await vscode.commands.executeCommand(command.local, ...(['qq.toggleFavorite', 'qq.toggleCollapsed', 'qq.markRead', 'qq.toggleIgnoreUnread'].includes(command.local) ? [chat.key] : [])); return; }
+        if (command.special === 'reply') {
+          const value = await this.askMessage(store, chat, check); check();
+          if (value && uri) await vscode.commands.executeCommand('qq.reply', uri.toString(), value); return;
         }
-      });
-    } catch (error) {
-      if (command.mutation && requested && error instanceof OneBotRequestError && error.kind !== 'rejected') throw new Error(`/${name} 结果未确认，请先在 QQ 检查操作是否生效，再决定是否重试。${error.message}`);
-      throw error;
-    } finally { this.busy.delete(operation); }
+        online();
+        if (command.special === 'requests') { await this.handleRequests(store, chat, check, call); return; }
+        if (command.special === 'files') { await this.browseFiles(chat, check, call); return; }
+        if (command.special === 'poke') {
+          const target = chat.type === 'private' ? chat.id : await this.askUser(store, chat, check); check();
+          if (target && await this.confirm(command, context, { user_id: target })) await call(chat.type === 'group' ? 'group_poke' : 'friend_poke', { ...(chat.type === 'group' ? { group_id: chat.id } : {}), user_id: target });
+          return;
+        }
+        await executeSlashApi(command, context, {
+          check: online,
+          ask: field => field.kind === 'user' ? this.askUser(store, chat, check) : field.kind === 'message' ? this.askMessage(store, chat, check) : this.askField(field, name),
+          confirm: (command, context, params) => this.confirm(command, context, params),
+          call,
+          result: async (command, result, params) => {
+            if (command.mutation) {
+              // Update local projections only after the backend confirms success.
+              if (name === 'recall') store.recall(chat.key, String(params.message_id));
+              if (['card', 'title', 'admin', 'unadmin', 'kick'].includes(name)) { this.host.session.memberLoaded.delete(chat.key); await this.host.loadMembers(chat.key); check(); }
+              if (name === 'rename') store.upsert({ ...chat, name: String(params.group_name) });
+              if (name === 'friend_remark') store.upsert({ ...chat, name: String(params.remark) || chat.nickname || chat.id, remark: String(params.remark) });
+              if (name === 'group_remark') store.upsert({ ...chat, remark: String(params.remark) });
+              void vscode.window.showInformationMessage(`QQ · ${command.description}：操作成功`);
+            } else await this.showResult(command, result, check);
+          }
+        });
+      } catch (error) {
+        if (command.mutation && requested && error instanceof OneBotRequestError && error.kind !== 'rejected') throw new Error(`/${name} 结果未确认，请先在 QQ 检查操作是否生效，再决定是否重试。${error.message}`);
+        throw error;
+      }
+    });
   }
   private async askField(field: SlashField, name: string): Promise<string | boolean | undefined> {
     if (field.kind === 'choice') return (await vscode.window.showQuickPick((field.choices ?? []).map(c => ({ label: c.label, value: c.value })), { title: `/${name} · ${field.label}` }))?.value;

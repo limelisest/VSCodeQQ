@@ -10,6 +10,40 @@ import { newChat, parseMessage } from '../src/model';
 import { renderTranscript } from '../src/transcriptRenderer';
 import { deliverForward } from '../src/forwardDelivery';
 
+for (const recoverAll of [false, true]) test(`来源缓存过期时先恢复全部引用再发送，recoverAll=${recoverAll}`, async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-forward-expired-'));
+  const store = new ChatStore(folder, '123'), session = new AccountSession();
+  const source = newChat('group', '42', '来源'), target = newChat('private', '456', '目标');
+  store.upsert(source); store.upsert(target);
+  const messages = [11, 12].map(message_id => parseMessage({ message_id, message: '原文' }, source.key));
+  for (const message of messages) store.add(message, false);
+  const registered = new Set<string>();
+  let sends = 0;
+  const host = { store, session, ready: true, client: { call: (async (action: string, params: Record<string, any>) => {
+    if (action === 'get_msg') {
+      if (params.message_id === '999') throw new Error('详情暂不可用');
+      if (!registered.has(params.message_id)) throw new OneBotRequestError('rejected', '消息不存在');
+      return { message_id: params.message_id, message: '原文' };
+    }
+    if (action === 'get_group_msg_history') {
+      assert.equal(params.group_id, '42');
+      registered.add('11'); if (recoverAll) registered.add('12');
+      return { messages: [...registered].map(message_id => ({ message_id, time: 1 })) };
+    }
+    assert.equal(action, 'send_private_forward_msg');
+    assert.deepEqual(params.messages.map((node: any) => node.data.id), ['11', '12']);
+    assert.ok(params.messages.every((node: any) => registered.has(node.data.id)));
+    sends++; return { message_id: 999, forward_id: 'resource' };
+  }) as OneBotClient['call'] } };
+  try {
+    const sending = deliverForward(host, target, messages, true, () => {});
+    if (recoverAll) await sending;
+    else await assert.rejects(sending, /停止合并转发/);
+    assert.equal(sends, recoverAll ? 1 : 0);
+    assert.equal(store.messages.get(target.key)!.at(-1)!.sendState, recoverAll ? 'sent' : 'failed');
+  } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
+});
+
 for (const newerAt of ['receipt', 'detail', 'none'] as const) test(`迟到的转发更新只刷新最新消息摘要：${newerAt}`, async () => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-forward-preview-'));
   const store = new ChatStore(folder, '123'), session = new AccountSession();
@@ -20,7 +54,7 @@ for (const newerAt of ['receipt', 'detail', 'none'] as const) test(`迟到的转
   const detailStarted = new Promise<void>(resolve => { detailReady = resolve; });
   const receipt = new Promise(resolve => { resolveReceipt = resolve; });
   const detail = new Promise(resolve => { resolveDetail = resolve; });
-  const host = { store, session, ready: true, client: { call: (async (action: string) => {
+  const host = { store, session, ready: true, client: { call: (async (action: string, params: Record<string, unknown>) => {
     if (action === 'get_msg') { detailReady(); return detail; }
     receiptReady(); return receipt;
   }) as OneBotClient['call'] } };
@@ -57,7 +91,8 @@ for (const merged of [false, true]) for (const echo of ['none', 'before', 'after
   const message = parseMessage({ message_id: 11, user_id: 8, message: '转发原文' }, source.key);
   const raw = { message_id: 999, user_id: 123, time: Math.floor(Date.now() / 1000), message: merged ? [{ type: 'forward', data: { id: 'resource' } }] : '转发原文' };
   let calls = 0;
-  const host = { store, session, ready: true, client: { call: (async (action: string) => {
+  const host = { store, session, ready: true, client: { call: (async (action: string, params: Record<string, unknown>) => {
+    if (action === 'get_msg' && params.message_id === '11') return { message_id: 11, message: '转发原文' };
     if (action === 'get_msg') throw new Error('详情暂不可用');
     calls++;
     const local = store.messages.get(target.key)!.find(m => m.id.startsWith('local:'))!;
@@ -87,7 +122,8 @@ for (const kind of ['rejected', 'timeout', 'disconnected', 'switch', 'detail-swi
   const store = new ChatStore(path.join(folder, 'old'), '123'), other = new ChatStore(path.join(folder, 'new'), '987');
   const target = newChat('group', '1', '目标'); store.upsert(target); other.upsert(target);
   const session = new AccountSession(); let sends = 0;
-  const host = { store, session, ready: true, client: { call: (async (action: string) => {
+  const host = { store, session, ready: true, client: { call: (async (action: string, params: Record<string, unknown>) => {
+    if (action === 'get_msg' && params.message_id === '11') return { message_id: 11, message: '原文' };
     if (action === 'get_msg') {
       if (kind === 'detail-switch') { session.advance(); host.store = other; }
       return { message_id: 999, user_id: 123, time: Math.floor(Date.now() / 1000), message: [{ type: 'forward', data: { id: 'actual-resource' } }] };

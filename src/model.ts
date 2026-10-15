@@ -47,6 +47,7 @@ export interface Message {
   forwardDelivery?: boolean;
   localImages?: Attachment[];
   fileIds?: string[];
+  systemNotice?: string;
 }
 export interface Member { id: string; name: string; title: string; role: string; nickname?: string; }
 export interface Attachment { id: string; kind: 'image' | 'face' | 'file'; label: string; size?: number; file?: string; faceId?: string; sticker?: boolean; placeholder?: string; }

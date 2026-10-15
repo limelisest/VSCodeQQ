@@ -2,7 +2,7 @@
   "name": "limelisest-napcat-qq",
   "displayName": "NapCat QQ · Native Chat",
   "description": "使用原生编辑器聊天的 NapCat / OneBot v11 QQ 客户端。",
-  "version": "0.2.8",
+  "version": "0.2.12",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
@@ -31,6 +31,7 @@
     "build": "node scripts/build.mjs",
     "test": "node --test dist/test/unit.cjs",
     "test:extension": "node scripts/run-extension-tests.cjs",
+    "test:forward": "node scripts/run-forward-tests.cjs",
     "screenshots": "node scripts/run-extension-tests.cjs --preview",
     "test:live": "node dist/test/live.cjs",
     "package": "node scripts/package.mjs"

@@ -36,6 +36,7 @@ export class MockNapCat {
   historyFailures = new Set<string>();
   failSend = false;
   rejectedActions = new Set<string>();
+  actionDelays = new Map<string, number>();
   fileUploads: any[] = [];
   fileDelay = 0;
   failFileName = '';
@@ -44,6 +45,8 @@ export class MockNapCat {
   uploadedBytes = new Map<string, Buffer>();
   sequence = 9000;
   rejectedForwardIds = new Set<string>();
+  forwardDelay = 0;
+  forwardResults = new Map<string, unknown>();
   masks = new Map<string, number | null>([['20001', 1], ['20002', 1]]);
   async start(): Promise<void> {
     this.http = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(req.url?.includes('tall') ? tallPng : req.url?.includes('wide') ? widePng : png); });
@@ -55,10 +58,14 @@ export class MockNapCat {
     this.url = `ws://127.0.0.1:${(this.server.address() as any).port}`;
     this.server.on('connection', socket => socket.on('message', async bytes => {
       const req = JSON.parse(bytes.toString()); this.calls.push(req);
+      const actionDelay = this.actionDelays.get(req.action);
+      if (actionDelay) await new Promise(resolve => setTimeout(resolve, actionDelay));
       const respond = (data: unknown, status = 'ok') => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ status, retcode: status === 'ok' ? 0 : 100, data, echo: req.echo })); };
       if (this.rejectedActions.has(req.action)) { respond(null, 'failed'); return; }
       switch (req.action) {
         case 'get_forward_msg':
+          if (this.forwardDelay) await new Promise(resolve => setTimeout(resolve, this.forwardDelay));
+          if (this.forwardResults.has(req.params.message_id)) { respond(this.forwardResults.get(req.params.message_id)); break; }
           if (this.rejectedForwardIds.has(req.params.message_id)) {
             socket.send(JSON.stringify({ status: 'failed', retcode: 1200, message: 'protocolFallbackLogic: 找不到相关的聊天记录', echo: req.echo }));
             break;
@@ -66,7 +73,7 @@ export class MockNapCat {
           respond({ messages: req.params.message_id === 'nested-forward' ? [
             { sender: { user_id: 10001, nickname: '嵌套发送者' }, time: 1700000000, content: [{ type: 'text', data: { text: '嵌套转发正文' } }] }
           ] : [
-            { sender: { user_id: 10001, nickname: '转发发送者' }, time: 1700000000, content: [{ type: 'text', data: { text: '合并转发正文' } }, { type: 'image', data: { file: 'forward-image', url: this.imageUrl } }, { type: 'forward', data: { id: 'nested-forward' } }] }
+            { sender: { user_id: 10001, nickname: '转发发送者' }, time: 1700000000, content: [{ type: 'text', data: { text: '合并转发正文' } }, { type: 'image', data: { file: 'forward-image', url: this.imageUrl } }, { type: 'forward', data: { id: 'nested-forward', content: [] } }] }
           ] }); break;
         case 'forward_group_single_msg': case 'forward_friend_single_msg': case 'send_group_forward_msg': case 'send_private_forward_msg': respond({ message_id: 99001 }); break;
         case 'get_status': respond({ online: true, good: true }); break;
