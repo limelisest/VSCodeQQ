@@ -6,6 +6,7 @@ import { AttachmentFiles } from './attachments';
 import { uploadToNapCat } from './fileUpload';
 import { Attachment, Message, Segment, draftParts, outgoingDrafts, id, parseMessage, splitKey } from './model';
 import { AccountSession } from './accountSession';
+import { OperationLocks } from './operationLocks';
 interface OutboxHost {
   store?: ChatStore; attachments?: AttachmentFiles; client: OneBotClient;
   session: AccountSession; ready: boolean; log(error: unknown): void;
@@ -13,6 +14,13 @@ interface OutboxHost {
 export interface Submission { messageIds: string[]; completion: Promise<boolean>; }
 // Owns delivery, never editor focus or draft widgets. Persist before network submission.
 export class OutboxService {
+  private deliveries = new WeakMap<ChatStore, OperationLocks>();
+  private retries = new WeakMap<ChatStore, OperationLocks>();
+  private locks(map: WeakMap<ChatStore, OperationLocks>, store: ChatStore): OperationLocks {
+    let locks = map.get(store);
+    if (!locks) { locks = new OperationLocks(); map.set(store, locks); }
+    return locks;
+  }
   private cancelled = new Set<string>();
   private sendQueues = new Map<string, Promise<boolean>>();
   constructor(private host: OutboxHost) {}
@@ -55,7 +63,29 @@ export class OutboxService {
     message.outgoing = undefined; message.localImages = undefined; message.sendError = undefined;
     store.enrichMessage(message); await store.flush();
   }
+  retry(store: ChatStore, key: string, messageId: string, confirm: () => Promise<boolean>): Promise<boolean> {
+    return this.locks(this.retries, store).run(JSON.stringify([key, messageId]), async () => {
+      const token = this.host.session.capture();
+      const current = () => store.messages.get(key)?.find(m => m.id === messageId);
+      const message = current();
+      if (store !== this.host.store || !message?.outgoing || message.recalled || !['failed', 'uncertain'].includes(message.sendState ?? '')) return false;
+      if (!this.host.ready) throw new Error('NapCat 未连接，消息仍保留在记录中');
+      const state = message.sendState;
+      if (state === 'uncertain' && !await confirm()) return false;
+      const latest = current();
+      if (!token.current() || store !== this.host.store || !this.host.ready || !latest?.outgoing || latest.recalled || latest.sendState !== state) return false;
+      latest.sendState = 'queued'; latest.sendError = undefined; store.enrichMessage(latest);
+      return this.enqueue(store, latest);
+    });
+  }
   enqueue(store: ChatStore, message: Message): Promise<boolean> {
+    return this.locks(this.deliveries, store).run(JSON.stringify([message.chatKey, message.id]), () => {
+      const latest = store.messages.get(message.chatKey)?.find(m => m.id === message.id);
+      if (!latest?.outgoing || latest.recalled || !['queued', 'sending', 'failed', 'uncertain'].includes(latest.sendState ?? '')) return false;
+      return this.enqueueOnce(store, latest);
+    });
+  }
+  private enqueueOnce(store: ChatStore, message: Message): Promise<boolean> {
     const queueKey = `${store.selfId}:${message.chatKey}`;
     const previous = this.sendQueues.get(queueKey) ?? Promise.resolve(true);
     const files = this.host.attachments, epoch = this.host.session.generation;
@@ -64,6 +94,8 @@ export class OutboxService {
       const checkCancelled = () => { if (this.cancelled.has(message.id)) throw new Error('已取消发送'); };
       try {
         checkCancelled();
+        const latest = store.messages.get(message.chatKey)?.find(m => m.id === message.id);
+        if (!latest?.outgoing || latest.recalled || latest.sendState === 'sent' || latest.sendState === 'cancelled') return false;
         if (store !== this.host.store || epoch !== this.host.session.generation || !this.host.ready) throw new Error('连接已变化，消息尚未提交');
         message.sendState = 'sending'; message.sendError = undefined; message.sendProgress = undefined; store.enrichMessage(message);
         await store.flush();

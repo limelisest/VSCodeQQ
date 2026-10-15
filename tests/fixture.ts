@@ -36,6 +36,7 @@ export class MockNapCat {
   historyFailures = new Set<string>();
   failSend = false;
   rejectedActions = new Set<string>();
+  actionDelays = new Map<string, number>();
   fileUploads: any[] = [];
   fileDelay = 0;
   failFileName = '';
@@ -57,6 +58,8 @@ export class MockNapCat {
     this.url = `ws://127.0.0.1:${(this.server.address() as any).port}`;
     this.server.on('connection', socket => socket.on('message', async bytes => {
       const req = JSON.parse(bytes.toString()); this.calls.push(req);
+      const actionDelay = this.actionDelays.get(req.action);
+      if (actionDelay) await new Promise(resolve => setTimeout(resolve, actionDelay));
       const respond = (data: unknown, status = 'ok') => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ status, retcode: status === 'ok' ? 0 : 100, data, echo: req.echo })); };
       if (this.rejectedActions.has(req.action)) { respond(null, 'failed'); return; }
       switch (req.action) {

@@ -9,8 +9,10 @@ import { OneBotClient } from './onebot';
 import { Transcript } from './transcript';
 import { imageExtension } from './media';
 import { RecentEmoji, rememberEmoji } from './recentEmojis';
+import { AccountSession } from './accountSession';
 
 export interface EmojiPickerHost {
+  session: AccountSession;
   store?: ChatStore; target?: string; ready: boolean;
   attachments?: AttachmentFiles; client: OneBotClient; transcript?: Transcript;
   checkRead(): void;
@@ -64,18 +66,20 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
       try { await this.host.attachToDraft(key, [{ id: randomUUID(), kind: 'face', label: face.name, faceId: face.id }]); await this.remember(store.selfId, { id: `face:${face.id}`, kind: 'face', label: face.name, faceId: face.id }); await this.close(); }
       finally { this.choosing = false; }
     } else if (data.type === 'faces') {
-      const request = ++this.favoriteRequest;
       const count = Math.min(500, Math.max(48, Number(data.count) || 48));
-      this.post({ type: 'basicFaces', account: store.selfId, key, faces: basicFaces });
-      this.favoriteSources.clear();
-      this.postRecent(store.selfId, key);
-      if (!this.host.ready) throw new Error('连接 NapCat 后可读取收藏表情');
-      const faces = await this.host.client.call('fetch_custom_face', { count });
-      if (store !== this.host.store || request !== this.favoriteRequest) return;
-      const entries = (Array.isArray(faces) ? faces : []).filter((u: unknown): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, count).map((url: string, i: number) => {
-        const id = randomUUID(); this.favoriteSources.set(id, { url, account: store.selfId }); return { id, label: `收藏表情 ${i + 1}` };
+      return this.host.session.run(JSON.stringify(['favorite-faces', key, count]), async () => {
+        const session = this.host.session.capture(), request = ++this.favoriteRequest;
+        this.post({ type: 'basicFaces', account: store.selfId, key, faces: basicFaces });
+        this.favoriteSources.clear();
+        this.postRecent(store.selfId, key);
+        if (!this.host.ready) throw new Error('连接 NapCat 后可读取收藏表情');
+        const faces = await this.host.client.call('fetch_custom_face', { count });
+        if (!session.current() || store !== this.host.store || request !== this.favoriteRequest) return;
+        const entries = (Array.isArray(faces) ? faces : []).filter((u: unknown): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, count).map((url: string, i: number) => {
+          const id = randomUUID(); this.favoriteSources.set(id, { url, account: store.selfId }); return { id, label: `收藏表情 ${i + 1}` };
+        });
+        this.post({ type: 'favoriteFaces', account: store.selfId, key, entries, count, more: entries.length >= count && count < 500 });
       });
-      this.post({ type: 'favoriteFaces', account: store.selfId, key, entries, count, more: entries.length >= count && count < 500 });
     } else if (data.type === 'favoritePreview' || data.type === 'favoriteFace') {
       const source = this.favoriteSources.get(data.id);
       if (!source || source.account !== store.selfId || !this.host.transcript || !files) return;

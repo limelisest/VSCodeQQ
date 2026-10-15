@@ -1,6 +1,12 @@
+import { OperationLocks } from './operationLocks';
+
 // Every connection attempt invalidates work started by an earlier connection.
 // Consumers retain a token across awaits; cancelled work cannot publish into a new session.
 export class AccountSession {
+  private operations = new OperationLocks();
+  run<T>(key: string, action: () => T | PromiseLike<T>): Promise<T> {
+    return this.operations.run(JSON.stringify([this.generation, key]), action);
+  }
   private controller = new AbortController();
   generation = 0;
   readonly memberLoaded = new Map<string, number>();

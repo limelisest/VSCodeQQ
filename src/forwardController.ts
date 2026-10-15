@@ -17,7 +17,6 @@ export class ForwardController implements vscode.Disposable {
   private pages = new Map<string, Page>();
   private changed = new vscode.EventEmitter<vscode.Uri>();
   private disposables: vscode.Disposable[];
-  private forwarding = false;
   private opening = new Map<string, Promise<void>>();
   private output = vscode.window.createOutputChannel('QQ 转发诊断');
   constructor(private host: Host) {
@@ -80,9 +79,7 @@ export class ForwardController implements vscode.Disposable {
     });
   }
   async forward(merged = false): Promise<void> {
-    if (this.forwarding) return;
-    this.forwarding = true;
-    try {
+    return this.host.session.run('forward-send', async () => {
       const { store, chat, check } = this.context();
       const editor = vscode.window.activeTextEditor;
       const current = editor && this.host.transcript?.messageAt(editor.document.uri, editor.selection.active.line);
@@ -107,9 +104,12 @@ export class ForwardController implements vscode.Disposable {
         return deliverForward(this.host, target.value, latest as Message[], merged, error => this.output.appendLine(String(error)));
       });
       check(); void vscode.window.showInformationMessage(`已转发到 ${target.value.name}`);
-    } finally { this.forwarding = false; }
+    });
   }
   async view(): Promise<void> {
+    return this.host.session.run('forward-view', () => this.viewOnce());
+  }
+  private async viewOnce(): Promise<void> {
     const { uri, check } = this.context();
     if (!uri) return;
     const options = this.sourceMessages(uri).flatMap(m => m.segments.filter(s => s.type === 'forward').map((s, index) => ({ label: `${m.senderName}：合并转发`, description: m.id, messageId: m.id, index })));

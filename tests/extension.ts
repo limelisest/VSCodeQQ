@@ -8,6 +8,7 @@ import { DRAFT_DIVIDER } from '../src/nativeEditor';
 import { TestUI } from './ui';
 import { testForwardCommands } from './forwardExtension';
 import { testFileNotices } from './fileNoticeExtension';
+import { testOperationLocks } from './operationExtension';
 import { testSlashCommands } from './slashExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
 import { testReplyPlaceholder } from './replyExtension';
@@ -60,6 +61,7 @@ export async function run(): Promise<void> {
       await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
       await testFileNotices(app, backend, checks);
+      await testOperationLocks(app, backend, ui, checks);
       await testForwardCommands(app, backend, ui, checks);
       console.log(`QQ forward integration: ${checks.length} checks passed`);
       return;
@@ -1042,6 +1044,7 @@ export async function run(): Promise<void> {
     await testReplyPlaceholder(app, backend, checks);
     await testEmojiShortcuts(app, backend, ui, checks);
     await testFileNotices(app, backend, checks);
+    await testOperationLocks(app, backend, ui, checks);
     await testForwardCommands(app, backend, ui, checks);
     console.log('Forward integration: passed');
     await testSlashCommands(app, backend, ui, checks);

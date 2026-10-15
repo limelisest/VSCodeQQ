@@ -26,11 +26,13 @@ import { AttachmentFiles } from './attachments';
 import { downloadFile } from './download';
 import { OutboxService, Submission } from './outbox';
 import { AccountSession } from './accountSession';
+import { OperationLocks } from './operationLocks';
 import { NotificationSync, allowsUnread, allowsMessageNotification } from './notifications';
 import { ChatEditorController } from './chatEditorController';
 import { Attachment, Chat, Message, id, messageText, newChat, parseMessage, splitKey } from './model';
 
 export class QQApp implements vscode.Disposable {
+  private operations = new OperationLocks();
   readonly client = new OneBotClient();
   readonly config: Configuration;
   readonly settings: ConnectionSettings;
@@ -220,8 +222,13 @@ export class QQApp implements vscode.Disposable {
     if (vscode.workspace.getConfiguration('qq').get('autoConnect', true)) void this.connect().catch(error => this.log(error));
   }
   async connect(): Promise<void> {
+    return this.operations.run('connect', () => this.connectOnce());
+  }
+  private async connectOnce(): Promise<void> {
+    const session = this.session.capture(), token = await this.config.token();
+    if (!session.current()) throw new Error('连接操作已取消，请重新连接');
     this.updateStatus('连接中');
-    await this.client.connect(this.config.url, await this.config.token());
+    await this.client.connect(this.config.url, token);
     await this.initialization;
     if (!this.ready) throw new Error('NapCat 初始化未完成，请查看 QQ 输出日志');
   }
@@ -341,6 +348,9 @@ export class QQApp implements vscode.Disposable {
     });
   }
   async refresh(): Promise<void> {
+    return this.session.run('refresh', () => this.refreshOnce());
+  }
+  private async refreshOnce(): Promise<void> {
     if (!this.client.connected || !this.store) throw new Error('请先连接 NapCat');
     const store = this.store, epoch = this.epoch;
     const [friends, groups] = await Promise.all([this.client.call('get_friend_list'), this.client.call('get_group_list')]);
@@ -611,18 +621,21 @@ export class QQApp implements vscode.Disposable {
   }
   checkRead(): void { if (this.target && this.isReading(this.target)) this.store?.markRead(this.target); }
   private commands(): void {
-    const register = (command: string, action: (...args: any[]) => unknown) => {
-      this.disposables.push(vscode.commands.registerCommand(command, async (...args: any[]) => {
-        try { return await action(...args); } catch (error: any) { this.log(error); void vscode.window.showErrorMessage(error.message); throw error; }
+    const register = (command: string, action: (...args: any[]) => unknown, resource?: (...args: any[]) => unknown) => {
+      this.disposables.push(vscode.commands.registerCommand(command, (...args: any[]) => {
+        const execute = async () => {
+          try { return await action(...args); } catch (error: any) { this.log(error); void vscode.window.showErrorMessage(error.message); throw error; }
+        };
+        return resource ? this.session.run(JSON.stringify([command, resource(...args)]), execute) : execute();
       }));
     };
     const currentKey = (item?: (Chat & { account?: string }) | string): string | undefined => typeof item === 'string' ? item : item?.account && item.account !== this.store?.selfId ? undefined : item?.key ?? this.target;
-    register('qq.forwardMessage', () => this.forwards.forward());
-    register('qq.mergeForward', () => this.forwards.forward(true));
-    register('qq.viewForward', () => this.forwards.view());
-    register('qq.openForward', (uri: string, messageId: string, index: number) => this.forwards.open(uri, messageId, index));
-    register('qq.openForwardImage', (uri: string, messageId: string, index: number) => this.forwards.openImage(uri, messageId, index));
-    register('qq.slash', (name?: string, invocation?: SlashInvocation) => this.slash.run(name, invocation));
+    register('qq.forwardMessage', () => this.forwards.forward(), () => this.target);
+    register('qq.mergeForward', () => this.forwards.forward(true), () => this.target);
+    register('qq.viewForward', () => this.forwards.view(), () => this.target);
+    register('qq.openForward', (uri: string, messageId: string, index: number) => this.forwards.open(uri, messageId, index), (...args) => args);
+    register('qq.openForwardImage', (uri: string, messageId: string, index: number) => this.forwards.openImage(uri, messageId, index), (...args) => args);
+    register('qq.slash', (name?: string, invocation?: SlashInvocation) => this.slash.run(name, invocation), (name, invocation) => [invocation?.uri ?? this.target, name ?? 'help']);
     register('qq.openEmojiPicker', (invocation: SlashInvocation) => this.emojiCompletion.open(invocation));
     register('qq.connect', () => this.connect());
     register('qq.disconnect', () => this.client.disconnect());
@@ -640,8 +653,8 @@ export class QQApp implements vscode.Disposable {
     for (const page of ['list'] as Section[]) register(`qq.show.${page}`, async () => {
       await vscode.commands.executeCommand(`qq.${page}.focus`);
     });
-    register('qq.importConfig', async () => { if (await this.config.import()) await this.connect(); });
-    register('qq.refresh', () => this.ready ? this.refresh() : this.connect());
+    register('qq.importConfig', async () => { if (await this.config.import()) await this.connect(); }, () => 'config');
+    register('qq.refresh', () => this.ready ? this.refresh() : this.connect(), () => 'lists');
     register('qq.openChat', (item: string | Chat) => this.openChat(item));
     register('qq.toggleCollapsed', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleCollapsed(key); });
     register('qq.toggleFavorite', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleFavorite(key); });
@@ -675,15 +688,9 @@ export class QQApp implements vscode.Disposable {
     register('qq.retryMessage', async (uri: string, messageId: string) => {
       if (typeof uri !== 'string' || typeof messageId !== 'string') return;
       const store = this.store, key = this.transcript?.key(vscode.Uri.parse(uri));
-      const message = key && store?.messages.get(key)?.find(m => m.id === messageId);
-      if (!store || !message || !message.outgoing || !['failed', 'uncertain'].includes(message.sendState ?? '')) return;
-      if (!this.ready) throw new Error('NapCat 未连接，消息仍保留在记录中');
-      const state = message.sendState;
-      if (state === 'uncertain' && await vscode.window.showWarningMessage('这条消息的结果未确认，可能已经送达。检查聊天记录后仍要重试吗？', { modal: true }, '仍然重试') !== '仍然重试') return;
-      if (store !== this.store || message.sendState !== state) return;
-      message.sendState = 'queued'; message.sendError = undefined; store.enrichMessage(message);
-      return this.outbox.enqueue(store, message);
-    });
+      if (!store || !key) return;
+      return this.outbox.retry(store, key, messageId, async () => await vscode.window.showWarningMessage('这条消息的结果未确认，可能已经送达。检查聊天记录后仍要重试吗？', { modal: true }, '仍然重试') === '仍然重试');
+    }, (...args) => args);
     register('qq.cancelMessage', async (uri: string, messageId: string) => {
       const key = this.transcript?.key(vscode.Uri.parse(uri));
       const message = key && this.store?.messages.get(key)?.find(m => m.id === messageId);
@@ -742,6 +749,8 @@ export class QQApp implements vscode.Disposable {
     register('qq.downloadFile', async (uri: string, messageId: string, fileIndex: number) => {
       const store = this.store, key = this.transcript?.key(vscode.Uri.parse(uri));
       if (!store || !key || !Number.isInteger(fileIndex) || fileIndex < 0) return;
+      const session = this.session.capture();
+      const check = () => { if (store !== this.store || !session.current()) throw new Error('账号或连接已变化，下载已停止'); };
       const message = store.messages.get(key)?.find(m => m.id === messageId);
       const part = message?.segments.filter(s => s.type === 'file')[fileIndex];
       if (!part || part.type !== 'file') throw new Error('文件消息不在当前记录中');
@@ -749,15 +758,18 @@ export class QQApp implements vscode.Disposable {
       const safeName = ref.name.split(/[\\/]/).pop()?.replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/[. ]+$/, '') || 'QQ文件';
       const destination = await vscode.window.showSaveDialog({ title: '保存 QQ 文件', defaultUri: vscode.Uri.file(path.join(os.homedir(), 'Downloads', safeName)) });
       if (!destination || store !== this.store) return;
+      check();
       const chat = splitKey(key);
       let url = ref.url;
       if (ref.id && this.client.connected) {
         try {
           const result = await this.client.call(chat.type === 'group' ? 'get_group_file_url' : 'get_private_file_url', { file_id: ref.id, ...(chat.type === 'group' ? { group_id: chat.id, busid: ref.busid } : { user_id: chat.id }) });
+          check();
           if (typeof result?.url === 'string') url = result.url;
         } catch (error) { if (!url) throw error; }
       }
       if (!url) throw new Error('NapCat 未提供文件下载地址，请检查文件是否已过期');
+      check();
       const source = url;
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `下载 ${safeName}`, cancellable: true }, async (progress, token) => {
         const controller = new AbortController();
@@ -765,15 +777,16 @@ export class QQApp implements vscode.Disposable {
         let last = 0;
         try {
           if (token.isCancellationRequested) controller.abort();
-          await downloadFile(source, destination.fsPath, AbortSignal.any([controller.signal, AbortSignal.timeout(30 * 60 * 1000)]), (bytes, total) => {
+          await downloadFile(source, destination.fsPath, AbortSignal.any([controller.signal, session.signal, AbortSignal.timeout(30 * 60 * 1000)]), (bytes, total) => {
             const percent = total ? bytes / total * 100 : 0;
             progress.report({ increment: percent - last, message: `${(bytes / 1048576).toFixed(1)} MB${total ? ` / ${(total / 1048576).toFixed(1)} MB` : ''}` }); last = percent;
           });
         } finally { listener.dispose(); }
       });
+      check();
       const choice = await vscode.window.showInformationMessage(`文件已保存：${safeName}`, '打开所在文件夹');
       if (choice) await vscode.commands.executeCommand('revealFileInOS', destination);
-    });
+    }, (...args) => args);
     register('qq.insertMessageImage', (uri?: string, messageId?: string, imageIndex?: number) => this.insertMessageImage(uri, messageId, imageIndex));
     register('qq.openImage', async (uri: string, messageId: string, imageIndex: number) => {
       if (!this.transcript || typeof uri !== 'string' || typeof messageId !== 'string') return;
