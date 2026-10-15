@@ -24,6 +24,7 @@ const groupChange = (name: string, description: string, action: string, fields: 
 export const slashCommands: readonly SlashCommand[] = [
   local('emoji', '表情：收藏、最近使用和 QQ 表情', 'qq.emojis'),
   local('image', '图片：选择图片并插入草稿占位符', 'qq.insertImage'),
+  local('video', '视频：选择视频并插入草稿占位符', 'qq.insertVideo'),
   local('file', '文件：选择文件并插入草稿占位符', 'qq.insertFile'),
   local('mention', '提及：选择群成员插入真实 @', 'qq.mentionMember', 'group'),
   { name: 'reply', description: '回复：选择当前会话中的消息', category: '聊天', special: 'reply' },

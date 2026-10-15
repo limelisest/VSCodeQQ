@@ -12,7 +12,7 @@
       "contentName": "text.qq-draft",
       "patterns": [
         {
-          "match": "\\[(?:图片|表情):\\d+\\]",
+          "match": "\\[(?:图片|视频|表情):\\d+\\]",
           "name": "constant.other.placeholder.c"
         },
         {

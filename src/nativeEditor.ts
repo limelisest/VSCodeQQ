@@ -1,10 +1,15 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import * as fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { attachmentPattern, Attachment, inline, messageText } from './model';
 import { ChatStore } from './store';
 import { Transcript } from './transcript';
 import { AttachmentFiles } from './attachments';
 import { imagePreviewMarkup } from './imageHover';
+import { ResourceClipboard, RESOURCE_MIME, ResourceSpan } from './resourceClipboard';
+import { transferFiles } from './transferFiles';
+import { mentionPattern } from './mentions';
 
 export const DRAFT_DIVIDER = '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───';
 interface Host {
@@ -16,6 +21,7 @@ interface Host {
 // VS Code has no public per-range read-only API. Only the explicit draft region is sent.
 // This filesystem is local draft storage; saving a document NEVER sends a QQ message.
 export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposable {
+  readonly clipboard = new ResourceClipboard();
   private events = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
   readonly onDidChangeFile = this.events.event;
   private buffers = new Map<string, Uint8Array>();
@@ -262,11 +268,12 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
         link.tooltip = '取消此回复，也可直接删除占位符'; result.push(link);
       }
     }
-    for (const match of region.text.matchAll(/\[图片:\d+\]/g)) {
+    for (const match of region.text.matchAll(/\[(?:图片|视频):\d+\]/g)) {
       const item = this.attachmentAt(doc, doc.positionAt(region.start + match.index!));
       if (item?.attachment.file) {
-        const link = new vscode.DocumentLink(item.range, vscode.Uri.parse(`command:qq.openDraftImage?${encodeURIComponent(JSON.stringify([doc.uri.toString(), item.attachment.id]))}`));
-        link.tooltip = '预览待发送图片'; result.push(link);
+        const command = item.attachment.kind === 'video' ? 'qq.openDraftVideo' : 'qq.openDraftImage';
+        const link = new vscode.DocumentLink(item.range, vscode.Uri.parse(`command:${command}?${encodeURIComponent(JSON.stringify([doc.uri.toString(), item.attachment.id]))}`));
+        link.tooltip = item.attachment.kind === 'video' ? '打开待发送视频' : '预览待发送图片'; result.push(link);
       }
     }
     return result;
@@ -288,66 +295,132 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
       }
     };
   }
-  async drop(doc: vscode.TextDocument, position: vscode.Position, data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<vscode.DocumentDropEdit | undefined> {
-    const key = this.host.transcript?.key(doc.uri), region = this.region(doc), store = this.host.store, files = this.host.attachments;
-    if (!key || !region || !store || !files || doc.offsetAt(position) < region.start) return;
+  async prepareCopy(doc: vscode.TextDocument, ranges: readonly vscode.Range[], data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<void> {
+    const store = this.host.store, key = this.host.transcript?.key(doc.uri);
+    if (!store || !key || token.isCancellationRequested) return;
+    const region = this.region(doc), candidates: ResourceSpan[] = [];
+    const draft = store.draft(key);
+    if (region) {
+      for (const match of region.text.matchAll(attachmentPattern)) {
+        const attachment = draft.attachments.find(a => a.placeholder === match[0]);
+        if (attachment) candidates.push({ start: region.start + match.index!, end: region.start + match.index! + match[0].length, identity: `attachment:${attachment.id}`, resource: { kind: 'attachment', attachment } });
+      }
+      for (const match of region.text.matchAll(mentionPattern)) {
+        const qq = match[1] || draft.mentions?.[match[0]];
+        if (qq) candidates.push({ start: region.start + match.index!, end: region.start + match.index! + match[0].length, identity: `mention:${qq}`, resource: { kind: 'mention', qq, name: match[0].startsWith('[@:') ? match[0].slice(3, -1) : qq } });
+      }
+    }
+    if (this.historyMatches(doc)) {
+      const rendered = this.host.transcript?.rendered.get(key);
+      for (const span of rendered?.images ?? []) {
+        const message = store.messages.get(key)?.find(m => m.id === span.messageId);
+        const image = message?.segments.filter(s => s.type === 'image')[span.imageIndex];
+        if (image?.type === 'image') candidates.push({ start: doc.offsetAt(new vscode.Position(span.line, span.start)), end: doc.offsetAt(new vscode.Position(span.line, span.end)), identity: `image:${span.messageId}:${span.imageIndex}`, resource: { kind: 'image', image: image.image, local: message?.localImages?.[span.imageIndex] } });
+      }
+      for (const span of rendered?.videos ?? []) {
+        const message = store.messages.get(key)?.find(m => m.id === span.messageId);
+        const video = message?.segments.filter(s => s.type === 'video')[span.videoIndex];
+        if (video?.type === 'video') candidates.push({ start: doc.offsetAt(new vscode.Position(span.line, span.start)), end: doc.offsetAt(new vscode.Position(span.line, span.end)), identity: `video:${span.messageId}:${span.videoIndex}`, resource: { kind: 'video', video: video.video, local: message?.localVideos?.[span.videoIndex] } });
+      }
+      for (const span of rendered?.files ?? []) {
+        const message = store.messages.get(key)?.find(m => m.id === span.messageId);
+        const file = message?.segments.filter(s => s.type === 'file')[span.fileIndex];
+        if (file?.type === 'file') {
+          const local = message?.outgoing?.attachments.filter(a => a.kind === 'file')[span.fileIndex];
+          candidates.push({ start: doc.offsetAt(new vscode.Position(span.line, span.start)), end: doc.offsetAt(new vscode.Position(span.line, span.end)), identity: `file:${span.messageId}:${span.fileIndex}`, resource: local ? { kind: 'attachment', attachment: local } : { kind: 'file', file: file.file, key } });
+        }
+      }
+      for (const span of rendered?.mentions ?? []) {
+        const start = doc.offsetAt(new vscode.Position(span.line, span.start)), end = doc.offsetAt(new vscode.Position(span.line, span.end));
+        if (doc.getText(new vscode.Range(doc.positionAt(start), doc.positionAt(end))).startsWith('[@:')) candidates.push({ start, end, identity: `mention:${span.qq}`, resource: { kind: 'mention', qq: span.qq, name: span.name } });
+      }
+    }
+    let text = ''; const spans: ResourceSpan[] = [];
+    for (const range of ranges) {
+      if (text) text += '\n';
+      const from = doc.offsetAt(range.start), to = doc.offsetAt(range.end), offset = text.length;
+      text += doc.getText(range);
+      for (const span of candidates) if (span.start >= from && span.end <= to) spans.push({ ...span, start: offset + span.start - from, end: offset + span.end - from });
+    }
+    if (!spans.length || token.isCancellationRequested) return;
+    const handle = this.clipboard.put({ account: store.selfId, key, text, spans: spans.sort((a, b) => a.start - b.start) });
+    data.set(RESOURCE_MIME, new vscode.DataTransferItem(handle));
+  }
+  private async pasteResources(doc: vscode.TextDocument, range: vscode.Range, data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<vscode.DocumentPasteEdit[] | undefined> {
+    const store = this.host.store, key = this.host.transcript?.key(doc.uri), files = this.host.attachments, region = this.region(doc);
+    if (!store || !key || !files || !region) return;
+    const handle = await data.get(RESOURCE_MIME)?.asString(), text = await data.get('text/plain')?.asString();
+    const copy = handle && text !== undefined ? this.clipboard.get(handle, store.selfId, text) : undefined;
+    if (!copy) throw new Error('复制的 QQ 资源已失效或不属于当前账号，请重新复制');
     const version = doc.version, { operation, finish } = this.beginImport(doc, key);
-    const attachments: Attachment[] = [], seen = new Set<string>();
+    const staged: Attachment[] = [], attachments = new Map<string, Attachment>(), replacements = new Map<string, string>();
+    const check = () => { if (token.isCancellationRequested || store !== this.host.store || doc.version !== version || doc.isClosed) throw new Error('粘贴已取消或草稿发生变化，请重新粘贴'); };
     try {
-      const normalize = (value: string | vscode.Uri): vscode.Uri => {
-        if (typeof value === 'string' && /^[a-z]:[\\/]/i.test(value)) return vscode.Uri.file(value);
-        const uri = typeof value === 'string' ? vscode.Uri.parse(value) : value;
-        // Electron can expose a Windows OS file path as a drive-letter URI.
-        return /^[a-z]$/i.test(uri.scheme) && /^[\\/]/.test(uri.path) ? vscode.Uri.file(uri.scheme + ':' + uri.path) : uri;
-      };
-      const uris = data.get('text/uri-list');
-      const resources: vscode.Uri[] = uris ? (await uris.asString()).split(/\r?\n/).filter(s => s && !s.startsWith('#')).map(s => normalize(s)) : [];
-      const external = [...data].map(([, item]) => item.asFile()).filter((f): f is vscode.DataTransferFile => !!f);
-      for (const file of external) if (file.uri) resources.push(normalize(file.uri));
-      if (resources.length + external.filter(f => !f.uri).length > 8) {
-        // The same file may be offered as both a URI and an OS file entry.
-        if (new Set(resources.map(u => u.toString())).size + external.filter(f => !f.uri).length > 8) throw new Error('每条消息最多附带 8 个附件');
+      for (const span of copy.spans) {
+        check(); if (attachments.has(span.identity) || span.resource.kind === 'mention') continue;
+        const source = span.resource.kind === 'attachment' ? span.resource.attachment : span.resource.kind === 'file' ? undefined : span.resource.local;
+        let attachment: Attachment;
+        if (source?.kind === 'face') attachment = { ...source, id: randomUUID(), placeholder: undefined };
+        else if (source?.kind === 'video') attachment = await files.stageAutoPath(await files.filePath(source), source.label);
+        else if (source?.kind === 'file') attachment = await files.stageFilePath(await files.filePath(source), source.label);
+        else if (source) attachment = await files.stage(await files.read(source), source.label, source.sticker);
+        else if (span.resource.kind === 'image' && this.host.transcript) {
+          const image = await this.host.transcript.media.get(span.resource.image); check();
+          attachment = await files.stage(await fs.readFile(image), '复制的图片');
+        } else if (span.resource.kind === 'video' && this.host.transcript) {
+          const video = await this.host.transcript.media.getVideo(span.resource.video); check();
+          attachment = await files.stageAutoPath(video, span.resource.video.name || '复制的视频' + path.extname(video));
+        } else if (span.resource.kind === 'file' && this.host.transcript) {
+          const file = await this.host.transcript.media.getFile(span.resource.file, span.resource.key); check();
+          attachment = await files.stageFilePath(file, span.resource.file.name);
+        } else throw new Error('复制的附件已不可用，请重新复制');
+        staged.push(attachment); attachments.set(span.identity, attachment);
       }
-      for (const uri of resources) {
-        const identity = process.platform === 'win32' ? uri.toString().toLowerCase() : uri.toString();
-        if (seen.has(identity)) continue;
-        seen.add(identity);
-        if (token.isCancellationRequested) throw new Error('文件导入已取消，请重新拖入');
-        if (uri.scheme !== 'file') throw new Error('请从本机文件管理器拖入文件');
-        attachments.push(await files.stageFilePath(uri.fsPath, path.basename(uri.fsPath)));
+      check();
+      const base = region.text.slice(0, doc.offsetAt(range.start) - region.start) + region.text.slice(doc.offsetAt(range.end) - region.start);
+      const occurrenceCount = copy.spans.filter(s => s.resource.kind !== 'mention').length;
+      if ((base.match(attachmentPattern)?.length ?? 0) + occurrenceCount > 8) throw new Error('每条消息最多附带 8 个附件');
+      const prepared = staged.length ? store.prepareAttachments(key, staged, base) : [];
+      const identities = [...attachments.keys()];
+      for (let i = 0; i < prepared.length; i++) replacements.set(identities[i], prepared[i].placeholder!);
+      for (const span of copy.spans) if (span.resource.kind === 'mention' && !replacements.has(span.identity)) {
+        replacements.set(span.identity, key === copy.key ? store.reserveMention(key, span.resource.qq, span.resource.name) : '@' + span.resource.name);
       }
-      for (const file of external.filter(f => !f.uri)) {
-        if (token.isCancellationRequested) throw new Error('文件导入已取消，请重新拖入');
-        attachments.push(await files.stageFile(Buffer.from(await file.data()), file.name));
-      }
-      if (!attachments.length) return;
-      if (token.isCancellationRequested || store !== this.host.store || doc.version !== version || doc.isClosed) throw new Error('导入时草稿发生变化或操作被取消，请重新拖入文件');
-      const prepared = store.prepareAttachments(key, attachments);
+      let result = copy.text;
+      for (const span of [...copy.spans].sort((a, b) => b.start - a.start)) result = result.slice(0, span.start) + replacements.get(span.identity)! + result.slice(span.end);
       operation.placeholders = prepared.map(a => a.placeholder!);
-      return new vscode.DocumentDropEdit(prepared.map(a => a.placeholder).join(''), '作为 QQ 文件附件插入', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'file'));
-    } catch (error) { await files.discard(attachments); throw error; }
+      return [new vscode.DocumentPasteEdit(result, '粘贴 QQ 资源', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'resources'))];
+    } catch (error) { await files.discard(staged); throw error; }
     finally { finish(); }
   }
-  async paste(doc: vscode.TextDocument, ranges: readonly vscode.Range[], data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<vscode.DocumentPasteEdit[] | undefined> {
+  private async importTransfer(doc: vscode.TextDocument, range: vscode.Range, data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<{ text: string; image: boolean } | undefined> {
     const key = this.host.transcript?.key(doc.uri), region = this.region(doc), store = this.host.store, files = this.host.attachments;
-    if (!key || !region || !store || !files || ranges.some(r => doc.offsetAt(r.start) < region.start)) return;
-    const images = [...data].filter(([mime, item]) => mime.startsWith('image/') && item.asFile());
-    if (!images.length) return;
-    if (ranges.length !== 1) throw new Error('粘贴图片时请只保留一个光标');
+    if (!key || !region || !store || !files || doc.offsetAt(range.start) < region.start) return;
     const version = doc.version, { operation, finish } = this.beginImport(doc, key);
-    const attachments: Attachment[] = [];
+    let attachments: Attachment[] = [];
     try {
-      // Clipboard formats can be alternative representations of one image.
-      const file = (images.find(([mime]) => mime === 'image/png') ?? images[0])[1].asFile()!;
-      attachments.push(await files.stage(Buffer.from(await file.data()), file.name || '粘贴的图片'));
-      if (token.isCancellationRequested || store !== this.host.store || doc.version !== version || doc.isClosed) {
-        await files.discard(attachments); return;
-      }
-      const prepared = store.prepareAttachments(key, attachments);
+      const check = () => { if (token.isCancellationRequested || store !== this.host.store || doc.version !== version || doc.isClosed) throw new Error('导入已取消或草稿发生变化，请重新导入'); };
+      attachments = await transferFiles(data, files, this.host.transcript?.media, check);
+      if (!attachments.length) return;
+      check();
+      const base = region.text.slice(0, doc.offsetAt(range.start) - region.start) + region.text.slice(doc.offsetAt(range.end) - region.start);
+      const prepared = store.prepareAttachments(key, attachments, base);
       operation.placeholders = prepared.map(a => a.placeholder!);
-      return [new vscode.DocumentPasteEdit(prepared.map(a => a.placeholder).join(''), '作为 QQ 图片占位符粘贴', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'image'))];
-    } catch (error) { await files.discard(attachments); throw error; }
+      return { text: prepared.map(a => a.placeholder).join(''), image: prepared.every(a => a.kind === 'image') };
+    } catch (error) { await files.discard(attachments); if (token.isCancellationRequested) return; throw error; }
     finally { finish(); }
+  }
+  async drop(doc: vscode.TextDocument, position: vscode.Position, data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<vscode.DocumentDropEdit | undefined> {
+    const imported = await this.importTransfer(doc, new vscode.Range(position, position), data, token);
+    if (imported) return new vscode.DocumentDropEdit(imported.text, imported.image ? '插入 QQ 图片' : '插入 QQ 附件', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', imported.image ? 'image' : 'file'));
+  }
+  async paste(doc: vscode.TextDocument, ranges: readonly vscode.Range[], data: vscode.DataTransfer, token: vscode.CancellationToken): Promise<vscode.DocumentPasteEdit[] | undefined> {
+    const region = this.region(doc);
+    if (!region || ranges.some(r => doc.offsetAt(r.start) < region.start)) return;
+    if (ranges.length !== 1) return;
+    if (data.get(RESOURCE_MIME)) return this.pasteResources(doc, ranges[0], data, token);
+    const imported = await this.importTransfer(doc, ranges[0], data, token);
+    if (imported) return [new vscode.DocumentPasteEdit(imported.text, imported.image ? '作为 QQ 图片粘贴' : '作为 QQ 附件粘贴', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', imported.image ? 'image' : 'file'))];
   }
 
   release(doc: vscode.TextDocument): void {
@@ -362,5 +435,5 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     this.saveTimers.clear(); this.importTimers.clear(); this.importing.clear();
     this.buffers.clear(); this.prefixes.clear(); this.expectedEdits.clear(); this.repairs.clear();
   }
-  dispose(): void { this.reset(); this.events.dispose(); }
+  dispose(): void { this.clipboard.clear(); this.reset(); this.events.dispose(); }
 }

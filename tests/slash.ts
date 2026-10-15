@@ -13,7 +13,7 @@ const io = (overrides: Partial<SlashIO> = {}): SlashIO => ({ check: () => {}, as
 test('指令名全部英文、说明中文，私聊不提供群管理，完整草稿才解释为指令', () => {
   assert.equal(new Set(slashCommands.map(c => c.name)).size, slashCommands.length);
   for (const c of slashCommands) { assert.match(c.name, /^[a-z][a-z0-9_]*$/); assert.match(c.description, /[\u4e00-\u9fff]/); }
-  for (const name of ['emoji', 'image', 'file', 'mention', 'recall', 'status', 'requests', 'group_files']) assert.ok(command(name));
+  for (const name of ['emoji', 'image', 'video', 'file', 'mention', 'recall', 'status', 'requests', 'group_files']) assert.ok(command(name));
   assert.equal(availableSlashCommands('private').some(c => c.name === 'ban'), false);
   assert.equal(availableSlashCommands('group').some(c => c.name === 'ban'), true);
   assert.equal(exactSlashCommand(' /STATUS\n', 'group')?.name, 'status');

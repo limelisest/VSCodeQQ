@@ -24,6 +24,10 @@ export function codeStyle(language: CodeLanguage) {
       : language === 'dart' || language === 'java' ? `    String ${name} = "`
       : language === 'kotlin' ? `    val ${name} = "` : language === 'swift' ? `    let ${name} = "`
       : `    const ${name}${language === 'typescript' ? ': string' : ''} = "`,
+    resource: (name: string) => c ? `    char *${name} = "` : python ? `    ${name} = (` + '"'
+      : language === 'dart' || language === 'java' ? `    String ${name} = "`
+      : language === 'kotlin' ? `    val ${name} = "` : language === 'swift' ? `    let ${name} = "`
+      : `    const ${name}${language === 'typescript' ? ': string' : ''} = "`,
     stringEnd: python ? '")' : `"${terminator}`,
     continuation: c ? '                 "' : '        "',
     join: ['javascript', 'typescript', 'kotlin', 'java', 'swift'].includes(language) ? ' +' : '',

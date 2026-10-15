@@ -2,7 +2,7 @@
   "name": "limelisest-napcat-qq",
   "displayName": "NapCat QQ · Native Chat",
   "description": "使用原生编辑器聊天的 NapCat / OneBot v11 QQ 客户端。",
-  "version": "0.2.12",
+  "version": "0.2.17",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
@@ -141,6 +141,14 @@
         "title": "QQ: 复制消息原文"
       },
       {
+        "command": "qq.openVideo",
+        "title": "QQ: 打开视频"
+      },
+      {
+        "command": "qq.openForwardVideo",
+        "title": "QQ: 打开转发中的视频"
+      },
+      {
         "command": "qq.openImage",
         "title": "QQ: 打开图片"
       },
@@ -164,6 +172,11 @@
         "icon": "$(send)"
       },
       {
+        "command": "qq.insertVideo",
+        "title": "QQ: 插入视频",
+        "icon": "$(device-camera-video)"
+      },
+      {
         "command": "qq.insertImage",
         "title": "QQ: 插入图片",
         "icon": "$(file-media)"
@@ -177,6 +190,10 @@
         "command": "qq.restoreTranscript",
         "title": "QQ: 重建聊天文档（恢复已缓存草稿）",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "qq.openDraftVideo",
+        "title": "QQ: 预览草稿视频"
       },
       {
         "command": "qq.openDraftImage",
@@ -462,6 +479,12 @@
         "editor.acceptSuggestionOnEnter": "on",
         "editor.dropIntoEditor.enabled": true,
         "editor.dropIntoEditor.preferences": [
+          "qq.image",
+          "qq.file"
+        ],
+        "editor.pasteAs.preferences": [
+          "qq.resources",
+          "qq.image",
           "qq.file"
         ],
         "editor.scrollBeyondLastLine": false,

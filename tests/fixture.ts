@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { createServer, Server } from 'node:http';
 import { deflateSync } from 'node:zlib';
 export const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+export const videoBytes = Buffer.from('000000186674797069736f6d0000020069736f6d69736f32', 'hex');
 function samplePng(width: number, height: number): Buffer {
   const chunk = (name: string, data: Buffer) => {
     const bytes = Buffer.concat([Buffer.from(name), data]); let crc = 0xffffffff;
@@ -40,6 +41,7 @@ export class MockNapCat {
   fileUploads: any[] = [];
   fileDelay = 0;
   failFileName = '';
+  fileEchoThenReject = false;
   streamDelay = 0;
   streamChunks = new Map<string, Buffer[]>();
   uploadedBytes = new Map<string, Buffer>();
@@ -49,7 +51,7 @@ export class MockNapCat {
   forwardResults = new Map<string, unknown>();
   masks = new Map<string, number | null>([['20001', 1], ['20002', 1]]);
   async start(): Promise<void> {
-    this.http = createServer((req, res) => { res.writeHead(200, { 'Content-Type': 'image/png' }); res.end(req.url?.includes('tall') ? tallPng : req.url?.includes('wide') ? widePng : png); });
+    this.http = createServer((req, res) => { res.writeHead(200, { 'Content-Type': req.url?.includes('video') ? 'video/mp4' : 'image/png' }); res.end(req.url?.includes('video') ? videoBytes : req.url?.includes('tall') ? tallPng : req.url?.includes('wide') ? widePng : png); });
     await new Promise<void>(resolve => this.http.listen(0, '127.0.0.1', resolve));
     const httpPort = (this.http.address() as any).port;
     this.imageUrl = `http://127.0.0.1:${httpPort}/image.png`;
@@ -123,8 +125,8 @@ export class MockNapCat {
           if (req.params.name === this.failFileName) respond(null, 'failed');
           else {
             const file_id = 'mock-file-' + this.fileUploads.length;
-            const event = { ...this.message(++this.sequence), post_type: 'message_sent', message_type: req.action === 'upload_group_file' ? 'group' : 'private', group_id: req.params.group_id, target_id: req.params.user_id, user_id: 123456, sender: { user_id: 123456, nickname: '我' }, message: [{ type: 'file', data: { file_id, name: req.params.name } }] };
-            this.emit(event); respond({ file_id });
+            const event = { ...this.message(++this.sequence), post_type: 'message_sent', message_type: req.action === 'upload_group_file' ? 'group' : 'private', group_id: req.params.group_id, target_id: req.params.user_id, user_id: 123456, sender: { user_id: 123456, nickname: '我' }, message: [{ type: 'file', data: { file_id, file: req.params.name, file_size: this.uploadedBytes.get(req.params.file)?.length } }] };
+            this.emit(event); respond({ file_id }, this.fileEchoThenReject ? 'failed' : 'ok');
           }
           break;
         }

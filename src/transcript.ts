@@ -42,7 +42,7 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const id = this.rendered.get(key)?.messages.get(line);
     return this.store.messages.get(key)?.find(m => m.id === id);
   }
-  private range(span: Span): vscode.Range { return new vscode.Range(span.line, span.start, span.line, span.end); }
+  private range(span: { line: number; start: number; end: number }): vscode.Range { return new vscode.Range(span.line, span.start, span.line, span.end); }
   private imageArgs(uri: vscode.Uri, span: Span): unknown[] { return [uri.toString(), span.messageId, span.imageIndex]; }
   private command(uri: vscode.Uri, span: Span): vscode.Uri {
     return vscode.Uri.parse(`command:qq.openImage?${encodeURIComponent(JSON.stringify(this.imageArgs(uri, span)))}`);
@@ -53,6 +53,10 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       const link = new vscode.DocumentLink(this.range(span), this.command(doc.uri, span));
       link.tooltip = '打开 QQ 图片'; return link;
     });
+    for (const span of this.rendered.get(key)?.videos ?? []) {
+      const target = vscode.Uri.parse(`command:qq.openVideo?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId, span.videoIndex]))}`);
+      const link = new vscode.DocumentLink(this.range(span), target); link.tooltip = '打开视频'; links.push(link);
+    }
     for (const span of this.rendered.get(key)?.forwards ?? []) {
       const target = vscode.Uri.parse(`command:qq.openForward?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId, span.forwardIndex]))}`);
       const link = new vscode.DocumentLink(new vscode.Range(span.line, span.start, span.line, span.end), target);
@@ -108,6 +112,11 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
   }
   async provideHover(doc: vscode.TextDocument, pos: vscode.Position, token: vscode.CancellationToken): Promise<vscode.Hover | undefined> {
     const key = this.key(doc.uri); if (!key) return;
+    const video = this.rendered.get(key)?.videos.find(span => this.range(span).contains(pos));
+    if (video) {
+      const md = new vscode.MarkdownString(`[打开视频](command:qq.openVideo?${encodeURIComponent(JSON.stringify([doc.uri.toString(), video.messageId, video.videoIndex]))})`);
+      md.isTrusted = { enabledCommands: ['qq.openVideo'] }; return new vscode.Hover(md, this.range(video));
+    }
     const mention = this.rendered.get(key)?.mentions.find(s => s.line === pos.line && pos.character >= s.start && pos.character < s.end);
     if (mention) {
       const md = new vscode.MarkdownString(); md.appendText(`@ ${mention.name} · ${mention.qq}`);
@@ -151,7 +160,8 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     return new vscode.Hover(md, this.range(span));
   }
   imageRanges(uri: vscode.Uri): vscode.Range[] {
-    const key = this.key(uri); return (key ? this.rendered.get(key)?.images ?? [] : []).map(s => this.range(s));
+    const key = this.key(uri), rendered = key ? this.rendered.get(key) : undefined;
+    return [...rendered?.images ?? [], ...rendered?.videos ?? []].map(s => this.range(s));
   }
   dispose(): void { this.rendered.clear(); this.uris.clear(); }
 }

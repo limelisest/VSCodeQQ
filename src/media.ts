@@ -1,7 +1,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { ImageRef } from './model';
+import { ImageRef, VideoRef, FileRef, splitKey } from './model';
+import { downloadFile } from './download';
 import { OneBotClient } from './onebot';
 import { imageSize } from 'image-size';
 
@@ -22,11 +23,82 @@ export function imageExtension(data: Buffer): string | undefined {
   if (data.subarray(0, 2).toString() === 'BM') return '.bmp';
   return undefined;
 }
+export function videoExtension(data: Buffer): string | undefined {
+  if (data.length >= 12 && data.subarray(4, 8).toString() === 'ftyp') {
+    const brand = data.subarray(8, 12).toString();
+    if (brand.startsWith('qt')) return '.mov';
+    if (/^(?:isom|iso[2-9]|mp4.|M4V |avc1|MSNV|3g[p2].)$/.test(brand)) return '.mp4';
+  }
+  if (data.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+    if (data.includes(Buffer.from('matroska'))) return '.mkv';
+    if (data.includes(Buffer.from('webm'))) return '.webm';
+  }
+  if (data.subarray(0, 4).toString() === 'RIFF' && data.subarray(8, 12).toString() === 'AVI ') return '.avi';
+  if (data.subarray(0, 3).toString() === 'FLV') return '.flv';
+}
 export class MediaCache {
   private pending = new Map<string, Promise<string>>();
   private active = 0;
   private waiters: (() => void)[] = [];
   constructor(readonly folder: string, private client: OneBotClient) {}
+  getFile(ref: FileRef, key: string): Promise<string> {
+    const hash = 'file-' + createHash('sha256').update(JSON.stringify([key, ref.id, ref.url])).digest('hex');
+    const existing = this.pending.get(hash); if (existing) return existing;
+    const task = this.limited(async () => {
+      const folder = path.join(this.folder, 'files'); await fs.mkdir(folder, { recursive: true });
+      await this.pruneResources(folder).catch(() => {});
+      const file = path.join(folder, hash + '.attachment');
+      try { if (Date.now() - (await fs.stat(file)).mtimeMs < 7 * 86400000) return file; } catch {}
+      const receive = async (url?: string) => {
+        if (!url || !/^https?:\/\//i.test(url)) throw new Error('NapCat 未提供可下载的文件地址');
+        await downloadFile(url, file, AbortSignal.timeout(30 * 60 * 1000));
+      };
+      try { await receive(ref.url); }
+      catch (error) {
+        if (!ref.id || !this.client.connected) throw error;
+        const chat = splitKey(key);
+        const result = await this.client.call(chat.type === 'group' ? 'get_group_file_url' : 'get_private_file_url', {
+          file_id: ref.id, ...(chat.type === 'group' ? { group_id: chat.id, busid: ref.busid } : { user_id: chat.id })
+        });
+        await receive(result?.url);
+      }
+      return file;
+    });
+    this.pending.set(hash, task);
+    void task.then(() => this.pending.delete(hash), () => this.pending.delete(hash)); return task;
+  }
+  getVideo(ref: VideoRef): Promise<string> {
+    const key = 'video-' + createHash('sha256').update(JSON.stringify([ref.file, ref.url])).digest('hex');
+    const existing = this.pending.get(key); if (existing) return existing;
+    const task = this.limited(async () => {
+      const folder = path.join(this.folder, 'videos'); await fs.mkdir(folder, { recursive: true });
+      await this.pruneResources(folder).catch(() => {});
+      for (const ext of ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv']) {
+        const file = path.join(folder, key + ext);
+        try { if (Date.now() - (await fs.stat(file)).mtimeMs < 7 * 86400000) return file; } catch {}
+      }
+      const temporary = path.join(folder, key + '.download');
+      const receive = async (url?: string) => {
+        if (!url || !/^https?:\/\//i.test(url)) throw new Error('NapCat 未提供可下载的视频地址');
+        await downloadFile(url, temporary, AbortSignal.timeout(30 * 60 * 1000));
+      };
+      try {
+        try { await receive(ref.url); }
+        catch (error) {
+          if (!ref.file || !this.client.connected) throw error;
+          const info = await this.client.call('get_file', { file_id: ref.file }, 120000);
+          await receive(info?.url);
+        }
+        const handle = await fs.open(temporary, 'r'), header = Buffer.alloc(4096);
+        let count: number; try { count = (await handle.read(header, 0, header.length, 0)).bytesRead; } finally { await handle.close(); }
+        const ext = videoExtension(header.subarray(0, count));
+        if (!ext) throw new Error('下载内容不是受支持的视频');
+        const file = path.join(folder, key + ext); await fs.rename(temporary, file); return file;
+      } finally { await fs.unlink(temporary).catch(() => {}); }
+    });
+    this.pending.set(key, task);
+    void task.then(() => this.pending.delete(key), () => this.pending.delete(key)); return task;
+  }
   get(ref: ImageRef): Promise<string> {
     const key = createHash('sha256').update(ref.file || ref.url || '').digest('hex');
     let task = this.pending.get(key);
@@ -81,10 +153,17 @@ export class MediaCache {
     if (!imageExtension(bytes)) throw new Error('响应不是受支持的图片');
     return bytes;
   }
+  private async pruneResources(folder: string): Promise<void> {
+    for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      const file = path.join(folder, entry.name);
+      if (Date.now() - (await fs.stat(file)).mtimeMs >= 7 * 86400000) await fs.unlink(file);
+    }
+  }
   private async prune(): Promise<void> {
-    const files = await Promise.all((await fs.readdir(this.folder)).map(async name => {
-      const file = path.join(this.folder, name); const stat = await fs.stat(file); return { file, size: stat.size, time: stat.mtimeMs };
-    }));
+    const files = (await Promise.all((await fs.readdir(this.folder)).map(async name => {
+      const file = path.join(this.folder, name); const stat = await fs.stat(file); return { file, size: stat.size, time: stat.mtimeMs, regular: stat.isFile() };
+    }))).filter(file => file.regular);
     let total = files.reduce((n, f) => n + f.size, 0);
     for (const file of files.sort((a,b) => a.time - b.time)) {
       if (total <= 128 * 1024 * 1024 && Date.now() - file.time < 7 * 86400000) break;

@@ -2,6 +2,10 @@ import './forwardDelivery';
 import './forwardSources';
 import './fileNotices';
 import './operationLocks';
+import './fileDelivery';
+import './deliveryChecks';
+import './fileReceipt';
+import './resourceTransfer';
 import './forward';
 import './architecture';
 import './slash';
@@ -452,7 +456,7 @@ test('接收文件保留元数据，下载原子写入，取消不覆盖已有�
   try {
     const msg = parseMessage({ message_id: 7, user_id: 456, message: [{ type: 'text', data: { text: '[文件:普通文字]' } }, { type: 'file', data: { file_id: 'file-7', name: '报告.txt', size: png.length, busid: 102 } }] }, 'group:1', '123');
     const rendered = renderTranscript(newChat('group', 1, '群'), [msg], '123');
-    assert.equal(rendered.files.length, 1);
+    assert.equal(rendered.files.length, 2);
     const span = rendered.files[0]; assert.equal(rendered.text.split('\n')[span.line].slice(span.start, span.end), '[文件:报告.txt]');
     const file = path.join(folder, 'download.txt');
     await downloadFile(backend.imageUrl, file, new AbortController().signal);

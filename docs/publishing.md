@@ -21,7 +21,7 @@ npm ci
 npm run build
 npm test
 npm run test:extension
-npm run package
+npm run package -- --release
 ```
 
 安装包输出到 `artifacts/limelisest-napcat-qq-<version>.vsix`，版本号以 `package.json` 为准。README、预览 PNG、更新日志、支持说明和许可会一起打包；本地配置、测试产物及源码工具不会进入安装包。
@@ -34,6 +34,8 @@ npm run package
 2. 首次上传选择 **New extension → Visual Studio Code**。
 3. 上传刚生成的 VSIX，检查展示名称、图标和说明后提交。
 4. 等待平台验证完成，在管理页检查发布状态。
+
+日常开发使用 `npm run package` 生成带预发行标记的 `-pre.vsix`，版本号保持不动；安装脚本默认安装开发包。只有明确发版时才执行以下正式发布流程，正式包安装使用 `node scripts/install-extension.cjs --release`。
 
 后续更新保留同一发布者与扩展名称，递增 `version`，同步更新 `package-lock.json` 和 `CHANGELOG.md` 后打包，在已有扩展中上传新版本。
 

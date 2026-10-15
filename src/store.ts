@@ -75,12 +75,12 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       try {
         const cached = JSON.parse(await fs.readFile(this.file(key), 'utf8'));
         if (!Array.isArray(cached)) throw new Error('聊天缓存格式异常，暂停清理附件');
-        for (const m of cached) { add(m.outgoing?.attachments); add(m.localImages); }
+        for (const m of cached) { add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
       } catch (error: any) { if (error.code !== 'ENOENT') throw error; }
     }
     // Read current references after filesystem awaits, so edits during the scan are protected.
     for (const d of this.drafts.values()) add(d.attachments); // Includes bounded undo attachments.
-    for (const messages of this.messages.values()) for (const m of messages) { add(m.outgoing?.attachments); add(m.localImages); }
+    for (const messages of this.messages.values()) for (const m of messages) { add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
     return refs;
   }
   upsert(chat: Chat): void {
@@ -160,11 +160,14 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     if (refreshPreview) this.updatePreview(messages[index]);
     this.trackOutbox(message.chatKey); this.dirty.add(message.chatKey); this.changed(message.chatKey);
   }
-  settleOutgoing(key: string, localId: string, confirmed: Message): Message {
+  settleOutgoing(key: string, localId: string, confirmed: Message, excludeFileEchoIds?: ReadonlySet<string>): Message {
     const current = this.messages.get(key) ?? [];
     const local = current.find(m => m.id === localId);
-    const echo = current.find(m => m.id !== localId && (m.id === confirmed.id || (m.senderId === this.selfId && !m.id.startsWith('local:') && confirmed.fileIds?.some(f => m.fileIds?.includes(f)))));
-    const message: Message = { ...confirmed, ...echo, sendState: 'sent', localImages: local?.localImages, outgoing: undefined, forwardDelivery: undefined, sendError: undefined };
+    // A real message ID is authoritative. UUID-only upload receipts may match
+    // new echoes, but never an older occurrence of the same file.
+    const matchFile = confirmed.id === localId && !!excludeFileEchoIds;
+    const echo = current.find(m => m.id !== localId && (m.id === confirmed.id || (matchFile && !excludeFileEchoIds!.has(m.id) && m.senderId === this.selfId && !m.id.startsWith('local:') && confirmed.fileIds?.some(f => m.fileIds?.includes(f)))));
+    const message: Message = { ...confirmed, ...echo, sendState: 'sent', localImages: local?.localImages, localVideos: local?.localVideos, outgoing: undefined, forwardDelivery: undefined, sendError: undefined };
     const settled = current.filter(m => m.id !== message.id || m.id === localId).map(m => m.id === localId ? message : m);
     if (!local) settled.push(message);
     this.messages.set(key, mergeMessages([], settled, this.limit));
@@ -205,7 +208,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
   clearDraftIfVersion(key: string, version: number): boolean { return this.draftService.clearDraftIfVersion(key, version); }
   completeSend(key: string, captured: Draft): boolean { return this.draftService.completeSend(key, captured); }
   attach(key: string, attachments: Attachment[]): void { this.draftService.attach(key, attachments); }
-  prepareAttachments(key: string, attachments: Attachment[]): Attachment[] { return this.draftService.prepareAttachments(key, attachments); }
+  prepareAttachments(key: string, attachments: Attachment[], baseText?: string): Attachment[] { return this.draftService.prepareAttachments(key, attachments, baseText); }
   removeAttachment(key: string, id: string): void { this.draftService.removeAttachment(key, id); }
   private changed(key: string, kind: StoreChange = 'messages'): void { this.schedule(); this.emit('change', key, kind); }
   private schedule(): void {

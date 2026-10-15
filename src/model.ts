@@ -11,6 +11,13 @@ export interface Chat {
   remark?: string; nickname?: string;
 }
 export interface ImageRef { file: string; url?: string; }
+export interface VideoRef { file: string; url?: string; name?: string; }
+export function mediaFilename(value: unknown, url?: string): string | undefined {
+  if (typeof value === 'string' && /\.(?:mp4|mov|webm|mkv|avi|flv)(?:[?#]|$)/i.test(value)) {
+    const name = value.split(/[\\/]/).pop()?.split(/[?#]/)[0]; if (name) return inline(name);
+  }
+  if (url) try { return mediaFilename(decodeURIComponent(new URL(url).pathname)); } catch {}
+}
 export interface FileRef { id: string; name: string; url?: string; busid?: number; size?: number; }
 export type Segment =
   | { type: 'text'; text: string }
@@ -18,6 +25,7 @@ export type Segment =
   | { type: 'file'; file: FileRef; text: string }
   | { type: 'face'; id: string; text: string }
   | { type: 'forward'; id: string; text: string; content?: unknown[] }
+  | { type: 'video'; video: VideoRef; text: string }
   | { type: 'image'; image: ImageRef };
 // Read v2 caches without guessing identities from ordinary text like "@123".
 export function normalizeSegments(segments: unknown[]): Segment[] {
@@ -25,6 +33,7 @@ export function normalizeSegments(segments: unknown[]): Segment[] {
     if (!value || typeof value !== 'object') return [];
     const s = value as Record<string, any>;
     if (s.type === 'image' && s.image && typeof s.image.file === 'string') return [{ type: 'image', image: s.image }];
+    if (s.type === 'video' && s.video && typeof s.video.file === 'string') return [{ type: 'video', video: s.video, text: '[视频]' }];
     if (typeof s.text !== 'string') return [];
     if (s.type === 'forward' && typeof s.id === 'string') return [{ type: 'forward', id: s.id, text: '[合并转发]', ...(Array.isArray(s.content) ? { content: s.content } : {}) }];
     if ((s.type === 'file' || s.type === 'text') && s.file && typeof s.file.name === 'string') return [{ type: 'file', file: s.file, text: s.text }];
@@ -46,14 +55,15 @@ export interface Message {
   outgoing?: Draft;
   forwardDelivery?: boolean;
   localImages?: Attachment[];
+  localVideos?: Attachment[];
   fileIds?: string[];
   systemNotice?: string;
 }
 export interface Member { id: string; name: string; title: string; role: string; nickname?: string; }
-export interface Attachment { id: string; kind: 'image' | 'face' | 'file'; label: string; size?: number; file?: string; faceId?: string; sticker?: boolean; placeholder?: string; }
+export interface Attachment { id: string; kind: 'image' | 'video' | 'face' | 'file'; label: string; size?: number; file?: string; faceId?: string; sticker?: boolean; placeholder?: string; }
 export interface Draft { text: string; replyId?: string; replyPlaceholder?: string; replies?: Record<string, string>; version: number; attachments: Attachment[]; mentions?: Record<string, string>; }
 export const emptyDraft = (): Draft => ({ text: '', version: 0, attachments: [] });
-export const attachmentPattern = /\[(?:(?:图片|表情):\d+|文件:[^\]\r\n]+)\]/g;
+export const attachmentPattern = /\[(?:(?:图片|视频|表情):\d+|文件:[^\]\r\n]+)\]/g;
 export function draftParts(text: string, attachments: Attachment[]): (string | Attachment)[] {
   const parts: (string | Attachment)[] = []; let offset = 0, count = 0;
   for (const match of text.matchAll(attachmentPattern)) {
@@ -124,12 +134,13 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
     switch (part.type) {
       case 'text': result.segments.push({ type: 'text', text: String(data.text ?? '').replace(/\r\n?/g, '\n').replace(/\0/g, '') }); break;
       case 'file': {
-        const name = inline(data.name || data.file_name || '文件');
+        const name = inline(data.name || data.file_name || data.file || '文件');
         result.segments.push({ type: 'file', text: `[文件:${name}]`, file: { id: id(data.file_id ?? data.file), name, url: typeof data.url === 'string' ? data.url : undefined, busid: Number(data.busid ?? data.bus_id) || undefined, size: Number(data.size ?? data.file_size) || undefined } });
         const fileId = id(data.file_id ?? data.file); if (fileId) (result.fileIds ??= []).push(fileId);
         break;
       }
       case 'image': result.segments.push({ type: 'image', image: { file: String(data.file ?? data.file_id ?? ''), url: typeof data.url === 'string' ? data.url : undefined } }); break;
+      case 'video': result.segments.push({ type: 'video', text: '[视频]', video: { file: String(data.file ?? data.file_id ?? ''), url: typeof data.url === 'string' ? data.url : undefined, name: inline(data.name || data.file_name) || mediaFilename(data.file, data.url) } }); break;
       case 'face': result.segments.push({ type: 'face', id: id(data.id), text: `[表情:${inline(data.id)}]` }); break;
       case 'forward': result.segments.push({ type: 'forward', id: id(data.id ?? data.resid), text: '[合并转发]', ...(Array.isArray(data.content) ? { content: data.content } : {}) }); break;
       case 'json': {

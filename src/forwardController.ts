@@ -27,6 +27,7 @@ export class ForwardController implements vscode.Disposable {
       vscode.languages.registerDocumentLinkProvider(selector, { provideDocumentLinks: doc => {
         const page = this.page(doc.uri); if (!page) return [];
         return [...page.rendered.forwards.map(s => this.link(doc.uri, s, 'qq.openForward', s.forwardIndex, '查看嵌套合并转发')),
+          ...page.rendered.videos.map(s => this.link(doc.uri, s, 'qq.openForwardVideo', s.videoIndex, '打开视频')),
           ...page.rendered.images.map(s => this.link(doc.uri, s, 'qq.openForwardImage', s.imageIndex, '打开图片'))];
       } }),
       vscode.languages.registerHoverProvider(selector, { provideHover: async (doc, pos, token) => {
@@ -214,6 +215,14 @@ export class ForwardController implements vscode.Disposable {
     const { check } = this.context(source);
     const file = await this.image(vscode.Uri.parse(source), messageId, index); check();
     await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file));
+  }
+  async openVideo(source: string, messageId: string, index: number): Promise<void> {
+    const { check } = this.context(source);
+    if (!Number.isInteger(index) || index < 0) return;
+    const segment = this.page(vscode.Uri.parse(source))?.messages.find(m => m.id === messageId)?.segments.filter(s => s.type === 'video')[index];
+    if (!segment || segment.type !== 'video') throw new Error('视频已失效');
+    const file = await this.host.transcript!.media.getVideo(segment.video); check();
+    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file), { preview: true, viewColumn: vscode.ViewColumn.Beside });
   }
   clear(): void { this.opening.clear(); for (const uri of this.pages.keys()) { this.pages.delete(uri); this.changed.fire(vscode.Uri.parse(uri)); } }
   dispose(): void { this.clear(); this.disposables.forEach(d => d.dispose()); }

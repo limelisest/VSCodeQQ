@@ -72,9 +72,9 @@ export class DraftService {
     const draft = this.draft(key);
     this.setDraft(key, draft.text + prepared.map(a => a.placeholder).join(''), draft.replyId);
   }
-  prepareAttachments(key: string, attachments: Attachment[]): Attachment[] {
+  prepareAttachments(key: string, attachments: Attachment[], baseText?: string): Attachment[] {
     const draft = this.draft(key);
-    const used = draft.text.match(attachmentPattern)?.length ?? 0;
+    const used = (baseText ?? draft.text).match(attachmentPattern)?.length ?? 0;
     if (used + attachments.length > 8) throw new Error('每条消息最多附带 8 个附件');
     const tokens = new Set(draft.attachments.map(a => a.placeholder));
     const prepared = attachments.map(a => {
@@ -83,7 +83,7 @@ export class DraftService {
         const name = inline(a.label).replace(/\[/g, '［').replace(/\]/g, '］');
         placeholder = `[文件:${name}]`; let number = 2;
         while (tokens.has(placeholder)) placeholder = `[文件:${name} (${number++})]`;
-      } else placeholder = `[${a.kind === 'image' ? '图片' : '表情'}:${++this.attachmentSerial}]`;
+      } else placeholder = `[${a.kind === 'image' ? '图片' : a.kind === 'video' ? '视频' : '表情'}:${++this.attachmentSerial}]`;
       tokens.add(placeholder); return { ...a, placeholder };
     });
     // Retain a small number of removed tokens so undo/redo can restore their attachments.

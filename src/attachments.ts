@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Attachment } from './model';
-import { imageExtension } from './media';
+import { imageExtension, videoExtension } from './media';
 
 export const basicFaces = [
   { id: '14', name: '微笑', icon: '🙂' }, { id: '1', name: '撇嘴', icon: '😒' },
@@ -29,6 +29,29 @@ export class AttachmentFiles {
     await fs.mkdir(this.folder, { recursive: true });
     await fs.writeFile(file, bytes);
     return { id, kind: 'file', label, file, size: bytes.length };
+  }
+  async stageAuto(bytes: Buffer, name: string): Promise<Attachment> {
+    if (imageExtension(bytes)) return this.stage(bytes, name);
+    const attachment = await this.stageFile(bytes, name);
+    const ext = videoExtension(bytes);
+    return ext ? this.videoFile(attachment, ext) : attachment;
+  }
+  private async videoFile(attachment: Attachment, ext: string): Promise<Attachment> {
+    const file = path.join(this.folder, attachment.id + ext);
+    await fs.rename(attachment.file!, file); return { ...attachment, kind: 'video', file };
+  }
+  async stageAutoPath(source: string, name: string): Promise<Attachment> {
+    const stat = await fs.stat(source);
+    if (!stat.isFile()) throw new Error('请拖入文件，文件夹请先压缩');
+    const handle = await fs.open(source, 'r');
+    const header = Buffer.alloc(4096);
+    let length: number;
+    try { length = (await handle.read(header, 0, header.length, 0)).bytesRead; } finally { await handle.close(); }
+    const video = videoExtension(header.subarray(0, length));
+    if (video) return this.videoFile(await this.stageFilePath(source, name), video);
+    if (!imageExtension(header.subarray(0, length))) return this.stageFilePath(source, name);
+    if (stat.size > 16 * 1024 * 1024) throw new Error('单张图片不能超过 16 MB');
+    return this.stage(await fs.readFile(source), name);
   }
   async stageFilePath(source: string, name: string): Promise<Attachment> {
     const stat = await fs.stat(source);
@@ -85,7 +108,7 @@ export class AttachmentFiles {
         if (!basicFaces.some(face => face.id === attachment.faceId)) throw new Error('无效的 QQ 表情');
         segments.push({ type: 'face', data: { id: attachment.faceId } });
       } else {
-        if (attachment.kind === 'file') throw new Error('文件必须通过文件上传接口发送');
+        if (attachment.kind === 'file' || attachment.kind === 'video') throw new Error('文件和视频必须先上传到 NapCat');
         const bytes = await this.read(attachment); size += bytes.length;
         if (size > 16 * 1024 * 1024) throw new Error('单条消息的图片总大小不能超过 16 MB');
         segments.push({ type: 'image', data: { file: `base64://${bytes.toString('base64')}`, ...(attachment.sticker ? { sub_type: 1 } : {}) } });

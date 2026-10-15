@@ -15,6 +15,7 @@ import { EmojiPicker } from './emojiPicker';
 import { EmojiCompletion } from './emojiCompletion';
 import { ForwardController } from './forwardController';
 import { fileTransferNotice } from './fileNotices';
+import { RESOURCE_MIME } from './resourceClipboard';
 import { SlashCommands, SlashInvocation } from './slashCommands';
 import { availableSlashCommands, exactSlashCommand } from './slashCatalog';
 import { boundReplies, outgoingReply } from './replies';
@@ -150,14 +151,15 @@ export class QQApp implements vscode.Disposable {
       provideHover: async (doc, pos, token) => await this.native.hover(doc, pos) ?? (this.native.historyMatches(doc) ? this.transcript?.provideHover(doc, pos, token) : undefined)
     }), vscode.window.registerWebviewViewProvider('qq.composer', this.emojis),
     vscode.languages.registerDocumentPasteEditProvider(selector, {
+      prepareDocumentPaste: (doc, ranges, data, token) => this.native.prepareCopy(doc, ranges, data, token),
       provideDocumentPasteEdits: (doc, ranges, data, _context, token) => this.native.paste(doc, ranges, data, token)
-    }, { pasteMimeTypes: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/bmp'], providedPasteEditKinds: [vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'image')] }));
+    }, { copyMimeTypes: [RESOURCE_MIME], pasteMimeTypes: [RESOURCE_MIME, 'image/*', 'video/*', 'files', 'text/uri-list', 'text/plain', 'text/html'], providedPasteEditKinds: ['resources', 'image', 'file'].map(kind => vscode.DocumentDropOrPasteEditKind.Empty.append('qq', kind)) }));
     this.disposables.push(vscode.languages.registerDocumentDropEditProvider(selector, {
       provideDocumentDropEdits: async (doc, position, data, token) => {
         try { return await this.native.drop(doc, position, data, token); }
         catch (error: any) { void vscode.window.showErrorMessage(`QQ 文件导入失败：${error.message}`); return new vscode.DocumentDropEdit('', '文件未导入', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'file')); }
       }
-    }, { dropMimeTypes: ['text/uri-list', 'files'], providedDropEditKinds: [vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'file')] }));
+    }, { dropMimeTypes: ['image/*', 'video/*', 'text/uri-list', 'files', 'text/plain', 'text/html'], providedDropEditKinds: ['image', 'file'].map(kind => vscode.DocumentDropOrPasteEditKind.Empty.append('qq', kind)) }));
     for (const section of ['list'] as Section[]) {
       const provider = new ChatTree(section, () => this.store); this.trees.push(provider);
       const view = new ChatListView(provider, () => this.store, query => this.filterList(section, query, false), this.context.extensionUri);
@@ -172,7 +174,7 @@ export class QQApp implements vscode.Disposable {
       }
     }));
     this.disposables.push(vscode.window.onDidChangeActiveTextEditor(editor => {
-      this.native.updateContext();
+      this.native.updateContext(); this.syncListSelection();
       const key = editor && this.transcript?.key(editor.document.uri);
       if (key) { this.target = key; this.emojis.update(); this.editor.decorate(editor!); this.checkRead(); void this.ensureChatLoaded(key, 0); }
     }), vscode.window.onDidChangeWindowState(() => this.checkRead()),
@@ -193,23 +195,19 @@ export class QQApp implements vscode.Disposable {
       if (event.kind === vscode.TextEditorSelectionChangeKind.Keyboard || event.kind === vscode.TextEditorSelectionChangeKind.Mouse) this.checkRead();
     }));
     this.disposables.push(vscode.window.tabGroups.onDidChangeTabs(event => {
-      this.tabs.refresh();
+      this.tabs.refresh(); this.syncListSelection();
       for (const tab of event.opened) if (tab.input instanceof vscode.TabInputText) {
         const key = this.transcript?.key(tab.input.uri); if (key) void this.ensureChatLoaded(key, tab.isActive ? 0 : 1);
       }
     }));
+    this.disposables.push(vscode.window.tabGroups.onDidChangeTabGroups(() => this.syncListSelection()));
     this.client.on('connected', () => {
       const epoch = this.session.advance();
       this.historyQueue.clear(); this.historyLoaded.clear();
       clearTimeout(this.initializationRetry); this.ready = false;
       this.initialization = this.initializeWithRetry(epoch);
     });
-    this.client.on('disconnected', () => {
-      clearTimeout(this.initializationRetry);
-      this.session.advance(); this.historyQueue.clear(); this.historyLoaded.clear(); this.ready = false; this.queued = [];
-      this.slash.clearResults(); this.forwards.clear();
-      this.notifications?.dispose(); clearInterval(this.notificationTimer); this.updateStatus('未连接');
-    });
+    this.client.on('disconnected', () => this.resetConnection());
     this.client.on('event', event => {
       if (!this.ready) { if (this.queued.length < 1000) this.queued.push(event); return; }
       this.onEvent(event);
@@ -223,6 +221,19 @@ export class QQApp implements vscode.Disposable {
   }
   async connect(): Promise<void> {
     return this.operations.run('connect', () => this.connectOnce());
+  }
+  disconnect(): void {
+    const generation = this.epoch;
+    this.client.disconnect();
+    // No socket exists while SecretStorage is still returning the token.
+    // Cancel that pending connection even when the client emits no close event.
+    if (this.epoch === generation) this.resetConnection();
+  }
+  private resetConnection(): void {
+    clearTimeout(this.initializationRetry);
+    this.session.advance(); this.historyQueue.clear(); this.historyLoaded.clear(); this.ready = false; this.queued = [];
+    this.slash.clearResults(); this.forwards.clear();
+    this.notifications?.dispose(); clearInterval(this.notificationTimer); this.updateStatus('未连接');
   }
   private async connectOnce(): Promise<void> {
     const session = this.session.capture(), token = await this.config.token();
@@ -304,6 +315,7 @@ export class QQApp implements vscode.Disposable {
     const store = this.store, files = this.attachments; if (!store || !files) return 0;
     const task = (async () => {
       const references = await store.attachmentReferences();
+      for (const file of this.native.clipboard.references(store.selfId)) references.add(path.resolve(file));
       if (store !== this.store) return 0;
       return files.prune(references, manual ? 0 : vscode.workspace.getConfiguration('qq').get('cacheRetentionDays', 7));
     })();
@@ -331,7 +343,7 @@ export class QQApp implements vscode.Disposable {
       this.store = store;
       this.attachments = new AttachmentFiles(path.join(folder, 'outgoing'));
       const transcript = new Transcript(store, new MediaCache(path.join(folder, 'images'), this.client), this.attachments);
-      this.transcript = transcript;
+      this.transcript = transcript; this.syncListSelection();
       store.on('change', (key: string, kind: StoreChange) => {
         if (store !== this.store) return;
         if (kind === 'messages' || kind === 'members' || kind === 'chat') this.native.schedule(key, true);
@@ -460,7 +472,7 @@ export class QQApp implements vscode.Disposable {
     if (version !== this.openVersion || store !== this.store) return;
     const editor = await vscode.window.showTextDocument(doc, { preview: false });
     await this.native.sync(editor);
-    this.target = key; this.editor.follow(editor, true);
+    this.target = key; this.syncListSelection(); this.editor.follow(editor, true);
     this.editor.latest(editor); this.editor.decorate(editor); this.emojis.update();
     await this.native.focus(editor);
     void this.ensureChatLoaded(key, 0); this.tabs.refresh();
@@ -635,10 +647,11 @@ export class QQApp implements vscode.Disposable {
     register('qq.viewForward', () => this.forwards.view(), () => this.target);
     register('qq.openForward', (uri: string, messageId: string, index: number) => this.forwards.open(uri, messageId, index), (...args) => args);
     register('qq.openForwardImage', (uri: string, messageId: string, index: number) => this.forwards.openImage(uri, messageId, index), (...args) => args);
+    register('qq.openForwardVideo', (uri: string, messageId: string, index: number) => this.forwards.openVideo(uri, messageId, index), (...args) => args);
     register('qq.slash', (name?: string, invocation?: SlashInvocation) => this.slash.run(name, invocation), (name, invocation) => [invocation?.uri ?? this.target, name ?? 'help']);
     register('qq.openEmojiPicker', (invocation: SlashInvocation) => this.emojiCompletion.open(invocation));
     register('qq.connect', () => this.connect());
-    register('qq.disconnect', () => this.client.disconnect());
+    register('qq.disconnect', () => this.disconnect());
     register('qq.configure', () => this.settings.open());
     register('qq.chooseCodeLanguage', async () => {
       const selected = await vscode.window.showQuickPick(codeLanguages.map(value => ({
@@ -689,7 +702,16 @@ export class QQApp implements vscode.Disposable {
       if (typeof uri !== 'string' || typeof messageId !== 'string') return;
       const store = this.store, key = this.transcript?.key(vscode.Uri.parse(uri));
       if (!store || !key) return;
-      return this.outbox.retry(store, key, messageId, async () => await vscode.window.showWarningMessage('这条消息的结果未确认，可能已经送达。检查聊天记录后仍要重试吗？', { modal: true }, '仍然重试') === '仍然重试');
+      return this.outbox.retry(store, key, messageId, async () => {
+        const file = store.messages.get(key)?.find(m => m.id === messageId)?.outgoing?.attachments.some(a => a.kind === 'file');
+        const warning = file ? '文件发送结果未确认，可能已经发送成功。请先检查目标会话；继续重试会再次发送同一文件。'
+          : '这条消息的结果未确认，可能已经送达。检查聊天记录后仍要重试吗？';
+        const selected = await vscode.window.showQuickPick([
+          { label: '取消', description: '先检查目标会话', retry: false },
+          { label: '仍然重试', description: '可能重复发送', detail: warning, retry: true }
+        ], { title: file ? '文件发送结果未确认' : '消息发送结果未确认', placeHolder: warning });
+        return selected?.retry === true;
+      });
     }, (...args) => args);
     register('qq.cancelMessage', async (uri: string, messageId: string) => {
       const key = this.transcript?.key(vscode.Uri.parse(uri));
@@ -710,6 +732,20 @@ export class QQApp implements vscode.Disposable {
     register('qq.restoreTranscript', async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor && this.transcript?.key(editor.document.uri)) { await this.native.sync(editor, true, true); await this.native.focus(editor); }
+    });
+    register('qq.insertVideo', async () => {
+      const store = this.store, files = this.attachments, key = this.target; if (!store || !files || !key) return;
+      const selected = await vscode.window.showOpenDialog({ canSelectMany: true, title: '选择要发送的视频', filters: { '视频': ['mp4', 'mov', 'webm', 'mkv', 'avi', 'flv'] } });
+      if (!selected?.length || store !== this.store) return;
+      const staged: Attachment[] = [];
+      try {
+        for (const uri of selected) {
+          const video = await files.stageAutoPath(uri.fsPath, path.basename(uri.fsPath)); staged.push(video);
+          if (video.kind !== 'video') throw new Error('所选文件不是受支持的视频');
+        }
+        if (store !== this.store) throw new Error('账号已切换，请重新导入');
+        await this.attachToDraft(key, staged);
+      } catch (error) { await files.discard(staged); throw error; }
     });
     register('qq.insertImage', () => this.target ? this.imports.selectImages(this.target) : undefined);
     register('qq.mentionMember', () => this.mentionMember());
@@ -788,6 +824,24 @@ export class QQApp implements vscode.Disposable {
       if (choice) await vscode.commands.executeCommand('revealFileInOS', destination);
     }, (...args) => args);
     register('qq.insertMessageImage', (uri?: string, messageId?: string, imageIndex?: number) => this.insertMessageImage(uri, messageId, imageIndex));
+    register('qq.openVideo', async (uri: string, messageId: string, index: number) => {
+      const store = this.store, transcript = this.transcript, key = transcript?.key(vscode.Uri.parse(uri));
+      if (!store || !transcript || !key || !Number.isInteger(index) || index < 0) return;
+      const message = store.messages.get(key)?.find(m => m.id === messageId);
+      const segment = message?.segments.filter(s => s.type === 'video')[index];
+      if (!segment || segment.type !== 'video') throw new Error('视频不在当前记录中，请重新加载历史');
+      const local = message?.localVideos?.[index];
+      const file = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '读取视频' }, () => local && this.attachments ? this.attachments.filePath(local) : transcript.media.getVideo(segment.video));
+      if (store !== this.store) return;
+      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file), { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    }, (...args) => args);
+    register('qq.openDraftVideo', async (uri: string, id: string) => {
+      const store = this.store, key = this.transcript?.key(vscode.Uri.parse(uri));
+      const video = key && store?.draft(key).attachments.find(a => a.id === id && a.kind === 'video');
+      if (!video || !this.attachments) return;
+      const file = await this.attachments.filePath(video); if (store !== this.store) return;
+      await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(file), { preview: true, viewColumn: vscode.ViewColumn.Beside });
+    }, (...args) => args);
     register('qq.openImage', async (uri: string, messageId: string, imageIndex: number) => {
       if (!this.transcript || typeof uri !== 'string' || typeof messageId !== 'string') return;
       const file = await this.transcript.image(vscode.Uri.parse(uri), messageId, imageIndex);
@@ -850,6 +904,11 @@ export class QQApp implements vscode.Disposable {
     const editor = await vscode.window.showTextDocument(doc, { preview: false });
     await this.native.focus(editor);
     this.editor.latest(editor);
+  }
+  private syncListSelection(): void {
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    const key = input instanceof vscode.TabInputText ? this.transcript?.key(input.uri) : undefined;
+    this.listViews.forEach(view => view.setActive(key));
   }
   filterList(section: Section, query: string, fromCommand = true): void {
     this.trees.find(t => t.section === section)?.setFilter(query);

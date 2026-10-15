@@ -20,6 +20,21 @@ export async function testOperationLocks(app: QQApp, backend: MockNapCat, ui: Te
   } finally { backend.sendDelay = 0; }
   checks.push('重复点击重发只发送一次，成功后的旧重发链接不能再次发送');
 
+  const file = await app.attachments!.stageFile(Buffer.from('file echo with rejected ack'), '回执异常.txt');
+  app.store!.attach(key, [file]); backend.fileEchoThenReject = true;
+  let fileSubmission;
+  try {
+    fileSubmission = app.outbox.submit(app.store!, key, app.store!.draft(key).text);
+    assert.equal(await fileSubmission.completion, true);
+  } finally { backend.fileEchoThenReject = false; }
+  assert.equal(app.store!.messages.get(key)!.some(m => m.id === fileSubmission.messageIds[0]), false);
+  await until(() => !!vscode.window.activeTextEditor?.document.getText().includes('[文件:回执异常.txt]'));
+  const uploads = backend.fileUploads.length;
+  const retryFiles = Array.from({ length: 5 }, () => vscode.commands.executeCommand('qq.retryMessage', uri, fileSubmission.messageIds[0]));
+  await Promise.all(retryFiles);
+  assert.equal(backend.fileUploads.length, uploads);
+  checks.push('文件已发出但接口报错时通过新回显确认成功，旧重试入口不再上传');
+
   backend.listDelay = 100;
   const friends = calls('get_friend_list'), groups = calls('get_group_list');
   try {
@@ -53,4 +68,20 @@ export async function testOperationLocks(app: QQApp, backend: MockNapCat, ui: Te
   await Promise.all(Array.from({ length: 5 }, () => app.connect()));
   assert.equal(calls('get_login_info') - login, 1); assert.equal(app.ready, true);
   checks.push('重复连接复用同一次握手和初始化');
+  app.disconnect();
+  const readToken = app.config.token.bind(app.config);
+  let releaseToken!: (value: string) => void;
+  const delayedToken = new Promise<string>(resolve => { releaseToken = resolve; });
+  const beforeCancelled = calls('get_login_info');
+  app.config.token = () => delayedToken;
+  try {
+    const connecting = app.connect();
+    const rejected = assert.rejects(connecting, /连接操作已取消/);
+    await vscode.commands.executeCommand('qq.disconnect');
+    releaseToken(''); await rejected;
+    assert.equal(calls('get_login_info'), beforeCancelled);
+    assert.equal(app.client.connected, false); assert.equal(app.ready, false);
+  } finally { app.config.token = readToken; }
+  await app.connect();
+  checks.push('读取 Token 期间断开连接也能取消待连接任务，不会稍后自行连上');
 }

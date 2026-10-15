@@ -10,6 +10,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
   private view?: vscode.WebviewView;
   private subscriptions: vscode.Disposable[] = [];
   private pendingFocus = false;
+  private activeKey?: string;
   constructor(private tree: ChatTree, private store: () => ChatStore | undefined, private filter: (query: string) => void, private extensionUri: vscode.Uri) {
     this.subscriptions.push(tree.onDidChangeTreeData(() => this.update()));
   }
@@ -20,7 +21,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
     const messages = view.webview.onDidReceiveMessage(async data => {
       if (!data || typeof data !== 'object') return;
       if (data.type === 'ready') {
-        void view.webview.postMessage({ type: 'initialFilter', query: this.tree.filter }); this.update();
+        void view.webview.postMessage({ type: 'initialFilter', query: this.tree.filter }); this.update(true);
         if (this.pendingFocus) this.focusSearch();
         return;
       }
@@ -31,7 +32,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
       const command = { open: 'qq.openChat', favorite: 'qq.toggleFavorite', collapse: 'qq.toggleCollapsed' }[data.type as string];
       if (command) await vscode.commands.executeCommand(command, data.key);
     });
-    const visibility = view.onDidChangeVisibility(() => { if (view.visible) this.update(); });
+    const visibility = view.onDidChangeVisibility(() => { if (view.visible) this.update(true); });
     const closed = view.onDidDispose(() => { messages.dispose(); visibility.dispose(); closed.dispose(); if (this.view === view) this.view = undefined; });
   }
   focusSearch(): void {
@@ -40,7 +41,12 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
     void this.view.webview.postMessage({ type: 'focus' });
   }
   setFilter(query: string): void { void this.view?.webview.postMessage({ type: 'filter', query }); }
-  private update(): void {
+  setActive(key?: string): void {
+    if (key === this.activeKey) return;
+    this.activeKey = key;
+    void this.view?.webview.postMessage({ type: 'active', account: this.store()?.selfId ?? '', key: key ?? '' });
+  }
+  private update(revealActive = false): void {
     if (!this.view?.visible) return;
     const store = this.store();
     const rows = this.tree.getChildren('', true).map(chat => ({
@@ -49,7 +55,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
       collapsed: !!store?.collapsed.has(chat.key), preview: chat.preview, favorite: !!store?.favorites.has(chat.key), unread: chat.unread,
       mention: chat.mentioned, reply: chat.replied, muted: !allowsUnread(chat), tooltip: this.tree.getTreeItem(chat).tooltip
     }));
-    void this.view.webview.postMessage({ type: 'rows', account: store?.selfId ?? '', rows });
+    void this.view.webview.postMessage({ type: 'rows', account: store?.selfId ?? '', rows, active: this.activeKey ?? '', revealActive });
   }
   private html(webview: vscode.Webview): string {
     const nonce = randomBytes(16).toString('hex');
@@ -60,11 +66,11 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
 @font-face{font-family:qq-codicons;src:url('${iconFont}') format('truetype');font-display:block}.codicon{display:inline-block;width:16px;height:16px;line-height:16px;font:normal normal normal 16px/1 qq-codicons;text-align:center;flex-shrink:0;-webkit-font-smoothing:antialiased}
 *{box-sizing:border-box}body{padding:0;margin:0;color:var(--vscode-sideBar-foreground);background:var(--vscode-sideBar-background);font:var(--vscode-font-size) var(--vscode-font-family);height:100vh;display:flex;flex-direction:column}
 .search{display:flex;gap:3px;flex-shrink:0;padding:6px 8px;background:var(--vscode-sideBar-background)}input{min-width:0;width:100%;height:26px;border:1px solid var(--vscode-input-border,transparent);background:var(--vscode-input-background);color:var(--vscode-input-foreground);padding:3px 6px;font:inherit;outline:none}input:focus,button:focus-visible,.row:focus-visible{outline:1px solid var(--vscode-focusBorder);outline-offset:-1px}input::placeholder{color:var(--vscode-input-placeholderForeground)}
-button{font:inherit;border:0;cursor:pointer;background:transparent;color:inherit;padding:3px 5px}button:hover{background:var(--vscode-toolbar-hoverBackground)}#results{overflow-y:auto;flex:1;min-height:0}.row{display:flex;align-items:center;gap:6px;padding:5px 8px;min-height:42px;cursor:pointer;outline:none}.row:hover{background:var(--vscode-list-hoverBackground);color:var(--vscode-list-hoverForeground)}.row.starred .name{font-weight:600}.row.selected{background:var(--vscode-list-inactiveSelectionBackground)}.row:focus{background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground)}.kind{opacity:.8}.text{flex:1;min-width:0}.name,.preview{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.preview{opacity:.7;font-size:11px;margin-top:2px}.count{border-radius:9px;padding:1px 5px;font-size:11px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground)}.count.muted{background:var(--vscode-editor-inactiveSelectionBackground,var(--vscode-badge-background));color:var(--vscode-descriptionForeground,var(--vscode-badge-foreground));opacity:.7}.box-icon{width:16px;height:16px;vertical-align:middle;flex-shrink:0}.row-actions{display:none;align-items:center;gap:2px;flex-shrink:0}.row-actions button{display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:3px}.row:hover .row-actions{display:flex}.row:hover>.count{display:none}.collapsed-entry{display:flex;align-items:center;gap:6px;text-align:left;padding:7px 8px;flex-shrink:0;border-bottom:1px solid var(--vscode-panel-border);font-weight:600}.collapsed-entry[aria-pressed=true]{color:var(--vscode-textLink-foreground)}#empty{padding:10px;opacity:.7}#empty:empty{display:none}#count{padding:0 8px 4px;font-size:11px;opacity:.65}::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--vscode-scrollbarSlider-background)}
+button{font:inherit;border:0;cursor:pointer;background:transparent;color:inherit;padding:3px 5px}button:hover{background:var(--vscode-toolbar-hoverBackground)}#results{overflow-y:auto;flex:1;min-height:0}.row{display:flex;align-items:center;gap:6px;padding:5px 8px;min-height:42px;cursor:pointer;outline:none}.row:hover{background:var(--vscode-list-hoverBackground);color:var(--vscode-list-hoverForeground)}.row.starred .name{font-weight:600}.row.active,#results:focus-within .row.selected{background:var(--vscode-list-inactiveSelectionBackground)}.row:focus{background:var(--vscode-list-activeSelectionBackground);color:var(--vscode-list-activeSelectionForeground)}.kind{opacity:.8}.text{flex:1;min-width:0}.name,.preview{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}.preview{opacity:.7;font-size:11px;margin-top:2px}.count{border-radius:9px;padding:1px 5px;font-size:11px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground)}.count.muted{background:var(--vscode-editor-inactiveSelectionBackground,var(--vscode-badge-background));color:var(--vscode-descriptionForeground,var(--vscode-badge-foreground));opacity:.7}.box-icon{width:16px;height:16px;vertical-align:middle;flex-shrink:0}.row-actions{display:none;align-items:center;gap:2px;flex-shrink:0}.row-actions button{display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:3px}.row:hover .row-actions{display:flex}.row:hover>.count{display:none}.collapsed-entry{display:flex;align-items:center;gap:6px;text-align:left;padding:7px 8px;flex-shrink:0;border-bottom:1px solid var(--vscode-panel-border);font-weight:600}.collapsed-entry[aria-pressed=true]{color:var(--vscode-textLink-foreground)}#empty{padding:10px;opacity:.7}#empty:empty{display:none}#count{padding:0 8px 4px;font-size:11px;opacity:.65}::-webkit-scrollbar{width:8px}::-webkit-scrollbar-thumb{background:var(--vscode-scrollbarSlider-background)}
 </style></head><body data-section="list"><div class="search"><input id="search" type="text" maxlength="200" aria-label="搜索会话" placeholder="搜索名称、备注、号码" autocomplete="off"><button id="clear" title="清除搜索" aria-label="清除搜索">×</button></div><button id="collapsed" class="collapsed-entry" aria-pressed="false">收纳箱 (0)</button><div id="count" role="status"></div><div id="empty"></div><div id="results" role="listbox" aria-label="会话列表"></div>
 <script nonce="${nonce}">
 const vscode=acquireVsCodeApi(), input=document.getElementById('search'), results=document.getElementById('results');
-let rows=[],account='',selected='',composing=false,touched=false,collapsed=!!vscode.getState()?.collapsed;
+let rows=[],account='',selected='',active='',composing=false,touched=false,collapsed=!!vscode.getState()?.collapsed;
 function save(){vscode.setState({query:input.value,collapsed});}
 input.value=vscode.getState()?.query||'';
 function send(type,key){vscode.postMessage({type,key,account});}
@@ -76,10 +82,10 @@ function render(){
  const visible=rows.filter(row=>terms.every(term=>row.search.includes(term))&&(terms.length>0||row.collapsed===collapsed));
  const entry=document.getElementById('collapsed');
  if(entry){const folded=rows.filter(row=>row.collapsed),unread=folded.reduce((n,row)=>n+row.unread,0);entry.replaceChildren(boxIcon(),document.createTextNode((collapsed?'← 返回列表 · ':'')+'收纳箱 ('+folded.length+')'));if(unread)entry.append(unreadBadge(unread,!folded.some(row=>row.unread&&!row.muted)));entry.setAttribute('aria-pressed',String(collapsed));results.setAttribute('aria-label',collapsed?'收纳箱':'会话列表');}
- if(!visible.some(row=>row.key===selected))selected=visible[0]?.key||'';
+ if(!visible.some(row=>row.key===selected))selected=visible.find(row=>row.key===active)?.key||visible[0]?.key||'';
  const fragment=document.createDocumentFragment();
  for(const row of visible){
-  const item=document.createElement('div');item.className='row'+(row.key===selected?' selected':'')+(row.favorite?' starred':'');item.dataset.key=row.key;item.tabIndex=row.key===selected?0:-1;item.setAttribute('role','option');item.setAttribute('aria-selected',String(row.key===selected));item.title=row.tooltip||row.name;
+  const item=document.createElement('div');item.className='row'+(row.key===selected?' selected':'')+(row.favorite?' starred':'')+(row.key===active?' active':'');item.dataset.key=row.key;item.tabIndex=row.key===selected?0:-1;item.setAttribute('role','option');item.setAttribute('aria-selected',String(row.key===selected));if(row.key===active)item.setAttribute('aria-current','true');item.title=row.tooltip||row.name;
   item.dataset.vscodeContext=JSON.stringify({webviewSection:'qq-chat-row',key:row.key,account,chatType:row.kind,preventDefaultContextMenuItems:true});
   const kind=icon(row.favorite?'star-full':row.kind==='group'?'organization':'account');kind.classList.add('kind');kind.title=row.favorite?'已收藏':row.kind==='group'?'群聊':'好友';kind.removeAttribute('aria-hidden');kind.setAttribute('role','img');kind.setAttribute('aria-label',kind.title);
   const text=document.createElement('div');text.className='text';const name=document.createElement('div');name.className='name';name.textContent=row.name;const preview=document.createElement('div');preview.className='preview';preview.textContent=(row.muted?'◦ ':'')+(row.preview||row.id);text.append(name,preview);item.append(kind,text);
@@ -94,20 +100,22 @@ function render(){
  document.getElementById('empty').textContent=visible.length?'':input.value.trim()?'没有匹配的会话':collapsed?'收纳箱为空':account?'暂无会话，请在下方设置中连接 NapCat':'请在下方设置中连接 NapCat';
  document.getElementById('count').textContent=input.value.trim()?visible.length+' 个结果':'';
 }
+function revealActive(){[...results.children].find(row=>row.dataset.key===active)?.scrollIntoView({block:'nearest'});}
 function filter(){touched=true;save();render();vscode.postMessage({type:'filter',query:input.value});}
+function openChat(key){if(input.value){collapsed=false;input.value='';filter();}send('open',key);}
 input.addEventListener('compositionstart',()=>composing=true);input.addEventListener('compositionend',()=>{composing=false;filter()});input.addEventListener('input',()=>{if(!composing)filter()});
 document.getElementById('clear').onclick=()=>{input.value='';filter();input.focus()};
 const collapsedEntry=document.getElementById('collapsed');if(collapsedEntry)collapsedEntry.onclick=()=>{collapsed=!collapsed;input.value='';filter();save();};
-results.onclick=event=>{const row=event.target.closest('.row');if(!row)return;selected=row.dataset.key;send(event.target.closest('[data-action]')?.dataset.action||'open',selected)};
+results.onclick=event=>{const row=event.target.closest('.row');if(!row)return;selected=row.dataset.key;const action=event.target.closest('[data-action]')?.dataset.action;if(action)send(action,selected);else openChat(selected)};
 document.addEventListener('keydown',event=>{
  if(composing||event.isComposing)return;
  if((event.ctrlKey||event.metaKey)&&event.key==='f'){event.preventDefault();input.focus();input.select();return;}
  if(event.key==='Escape'){event.preventDefault();input.value='';filter();input.focus();return;}
  const items=[...results.children];let index=items.findIndex(row=>row.dataset.key===selected);
  if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();index=document.activeElement===input?(event.key==='ArrowDown'?0:items.length-1):Math.max(0,Math.min(items.length-1,index+(event.key==='ArrowDown'?1:-1)));const row=items[index];if(row){selected=row.dataset.key;render();[...results.children][index].focus();}return;}
- if(event.key==='Enter'&&selected&&document.activeElement.tagName!=='BUTTON'){event.preventDefault();const key=selected;if(input.value){collapsed=false;input.value='';filter();}send('open',key);}
+ if(event.key==='Enter'&&selected&&document.activeElement.tagName!=='BUTTON'){event.preventDefault();openChat(selected);}
 });
-window.addEventListener('message',({data})=>{if(data.type==='rows'){rows=data.rows;account=data.account;render()}else if(data.type==='filter'||(data.type==='initialFilter'&&!touched)){input.value=data.query;save();render()}else if(data.type==='focus'){input.focus();input.select();vscode.postMessage({type:'focused'})}});
+window.addEventListener('message',({data})=>{if(data.type==='rows'){const changed=active!==data.active||account!==data.account;rows=data.rows;account=data.account;active=data.active||'';if(changed&&active)selected=active;render();if(changed||data.revealActive)revealActive()}else if(data.type==='active'){if(data.account!==account)return;active=data.key;if(active)selected=active;render();revealActive()}else if(data.type==='filter'||(data.type==='initialFilter'&&!touched)){input.value=data.query;save();render()}else if(data.type==='focus'){input.focus();input.select();vscode.postMessage({type:'focused'})}});
 vscode.postMessage({type:'ready'});
 </script></body></html>`;
   }

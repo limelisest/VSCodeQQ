@@ -3,7 +3,7 @@ import { CodeLanguage, codeStyle } from './codeStyle';
 
 export interface Span { line: number; start: number; end: number; messageId: string; imageIndex: number; }
 export interface MentionSpan { line: number; start: number; end: number; qq: string; name: string; }
-export interface Rendered { text: string; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
+export interface Rendered { text: string; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; videos: { line: number; start: number; end: number; messageId: string; videoIndex: number }[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
 // Escape only the display projection; copy/reply/send continue using the original message.
 export const codeString = (text: string): string => JSON.stringify(text).slice(1, -1)
   .replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -12,7 +12,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
   const escape = (text: string) => style.escape(codeString(text));
   const quote = (text: string) => `"${escape(text)}"`;
   const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} 底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 右键回复 · 图片悬浮预览`, ''];
-  const rendered: Rendered = { text: '', forwards: [], images: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
+  const rendered: Rendered = { text: '', forwards: [], images: [], videos: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
   const byId = new Map(messages.map(m => [m.id, m]));
   let lastDay = '';
   for (const m of messages) {
@@ -38,7 +38,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     if (m.sendState === 'sending' && m.sendProgress) {
       const p = m.sendProgress, percent = p.total ? Math.min(100, Math.floor(p.sent / p.total * 100)) : 0;
       const filled = Math.floor(percent / 10);
-      state = p.stage === 'confirm' ? '文件已传至 NapCat · 等待 QQ 确认…' : `上传到 NapCat [${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${percent}% · ${(p.sent / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB${p.bytesPerSecond ? ` · ${(p.bytesPerSecond / 1048576).toFixed(2)} MB/s` : ''}`;
+      state = p.stage === 'confirm' ? '附件已传至 NapCat · 等待 QQ 确认…' : `上传到 NapCat [${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${percent}% · ${(p.sent / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB${p.bytesPerSecond ? ` · ${(p.bytesPerSecond / 1048576).toFixed(2)} MB/s` : ''}`;
     }
     lines.push(style.constant('DATE', [quote(stamp)]));
     const fn = self ? (m.replyId ? 'send_reply' : 'send') : (m.replyId ? 'reply' : 'recv');
@@ -51,11 +51,18 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
       let replay = style.string('replay');
       if (target) {
         replay += escape(`${target.senderName}：`);
-        let remaining = 160, replyImageIndex = 0, truncated = false;
+        let remaining = 160, replyImageIndex = 0, replyVideoIndex = 0, replyFileIndex = 0, truncated = false;
         for (const part of target.segments) {
           if (part.type === 'image') {
             rendered.images.push({ line: lines.length, start: replay.length, end: replay.length + 4, messageId: target.id, imageIndex: replyImageIndex++ });
             replay += '[图片]';
+          } else if (part.type === 'video') {
+            rendered.videos.push({ line: lines.length, start: replay.length, end: replay.length + 4, messageId: target.id, videoIndex: replyVideoIndex++ });
+            replay += '[视频]';
+          } else if (part.type === 'file') {
+            const label = escape(part.text);
+            rendered.files.push({ line: lines.length, start: replay.length, end: replay.length + label.length, messageId: target.id, fileIndex: replyFileIndex++ });
+            replay += label;
           } else if (part.type === 'mention' && chat.type === 'group') {
             const text = escape(part.text);
             rendered.mentions.push({ line: lines.length, start: replay.length, end: replay.length + text.length, qq: part.qq, name: part.name || part.qq });
@@ -76,11 +83,17 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     };
     // The field itself remains an accessible reply target for empty/image-only messages.
     const msgStart = current.indexOf('msg'); replySpan(msgStart, msgStart + 3);
-    let imageIndex = 0, fileIndex = 0, forwardIndex = 0;
+    let imageIndex = 0, videoIndex = 0, fileIndex = 0, forwardIndex = 0;
+    const resources: { type: 'video' | 'file'; index: number; name: string; alias?: { line: number; start: number; end: number; messageId: string } }[] = [];
     for (const part of m.segments) {
       if (part.type === 'image') {
         rendered.images.push({ line: lines.length, start: current.length, end: current.length + 4, messageId: m.id, imageIndex: imageIndex++ });
         current += '[图片]';
+      } else if (part.type === 'video') {
+        const index = videoIndex++, label = `[视频:${index + 1}]`;
+        rendered.videos.push({ line: lines.length, start: current.length, end: current.length + label.length, messageId: m.id, videoIndex: index });
+        resources.push({ type: 'video', index, name: m.localVideos?.[index]?.label || part.video.name || '未命名视频' });
+        current += label;
       } else if (part.type === 'forward') {
         rendered.forwards.push({ line: lines.length, start: current.length, end: current.length + part.text.length, messageId: m.id, forwardIndex: forwardIndex++ });
         current += part.text;
@@ -88,19 +101,34 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
         const text = escape(part.text);
         rendered.mentions.push({ line: lines.length, start: current.length, end: current.length + text.length, qq: part.qq, name: part.name || part.qq });
         current += text;
+      } else if (part.type === 'file') {
+        const index = fileIndex++, label = `[文件:${index + 1}]`;
+        resources.push({ type: 'file', index, name: part.file.name, alias: { line: lines.length, start: current.length, end: current.length + label.length, messageId: m.id } });
+        current += label;
       } else {
-        if (part.type === 'file') rendered.files.push({ line: lines.length, start: current.length, end: current.length + escape(part.text).length, messageId: m.id, fileIndex: fileIndex++ });
         const parts = part.text.split('\n');
         for (let index = 0; index < parts.length; index++) {
           if (index) { lines.push(current + '\\n"' + style.join); current = style.continuation; }
           const text = escape(parts[index]);
-          if (part.type !== 'file') replySpan(current.length, current.length + text.length);
+          replySpan(current.length, current.length + text.length);
           current += text;
         }
       }
     }
     current += style.stringEnd;
     lines.push(current);
+    for (const resource of resources) {
+      const prefix = style.resource(`${resource.type}_${resource.index + 1}`);
+      const name = inline(resource.name).replace(/\[/g, '［').replace(/\]/g, '］');
+      const label = escape(`[${resource.type === 'video' ? '视频' : '文件'}:${name}]`);
+      const span = { line: lines.length, start: prefix.length, end: prefix.length + label.length, messageId: m.id };
+      if (resource.type === 'video') rendered.videos.push({ ...span, videoIndex: resource.index });
+      else {
+        rendered.files.push({ ...span, fileIndex: resource.index });
+        if (resource.alias) rendered.files.push({ ...resource.alias, fileIndex: resource.index });
+      }
+      lines.push(prefix + label + style.stringEnd);
+    }
     const ending = `${style.ending}${state ? `  ${style.comment} ${state}` : ''}`;
     if (ending.includes('[重试]')) rendered.actions.push({ line: lines.length, start: ending.indexOf('[重试]'), end: ending.indexOf('[重试]') + 4, messageId: m.id, kind: 'retry' });
     const cancellable = m.sendState === 'queued' || (m.sendState === 'sending' && m.sendProgress?.stage === 'upload');
