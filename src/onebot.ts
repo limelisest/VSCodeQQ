@@ -50,7 +50,12 @@ export class OneBotClient extends EventEmitter {
           const echo = String(data.echo); const pending = this.pending.get(echo);
           if (!pending) return;
           this.pending.delete(echo); clearTimeout(pending.timer);
-          if (data.status === 'failed' || (data.retcode != null && Number(data.retcode) !== 0)) pending.reject(new OneBotRequestError('rejected', `NapCat ${pending.action} 请求失败 (${Number(data.retcode) || 'failed'})`));
+          if (data.status === 'failed' || (data.retcode != null && Number(data.retcode) !== 0)) {
+            let detail = [...new Set([data.message, data.wording].filter((v): v is string => typeof v === 'string' && !!v.trim()))].join('；');
+            if (this.token) detail = detail.split(this.token).join('[已隐藏 Token]');
+            detail = detail.replace(/[\r\n]+/g, ' ').slice(0, 1000);
+            pending.reject(new OneBotRequestError('rejected', `NapCat ${pending.action} 请求失败 (${Number(data.retcode) || 'failed'})${detail ? `：${detail}` : ''}`));
+          }
           else pending.resolve(data.data);
         } else if (data.post_type) this.emit('event', data);
       });

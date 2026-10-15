@@ -13,6 +13,7 @@ import { HistoryQueue } from './historyQueue';
 import { ChatTabs } from './chatTabs';
 import { EmojiPicker } from './emojiPicker';
 import { EmojiCompletion } from './emojiCompletion';
+import { ForwardController } from './forwardController';
 import { SlashCommands, SlashInvocation } from './slashCommands';
 import { availableSlashCommands, exactSlashCommand } from './slashCatalog';
 import { boundReplies, outgoingReply } from './replies';
@@ -35,6 +36,7 @@ export class QQApp implements vscode.Disposable {
   readonly emojis: EmojiPicker;
   readonly emojiCompletion: EmojiCompletion;
   readonly slash: SlashCommands;
+  readonly forwards: ForwardController;
   readonly imports = new AttachmentImporter(this);
   readonly editor: ChatEditorController;
   get native() { return this.editor.native; }
@@ -81,6 +83,8 @@ export class QQApp implements vscode.Disposable {
       client: this.client, session: this.session, get ready() { return app.ready; }, log: error => this.log(error)
     });
     this.editor = new ChatEditorController(this);
+    this.forwards = new ForwardController(this);
+    this.disposables.push(this.forwards);
     this.slash = new SlashCommands(this);
     this.disposables.push(this.editor, this.slash);
     this.disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -200,7 +204,7 @@ export class QQApp implements vscode.Disposable {
     this.client.on('disconnected', () => {
       clearTimeout(this.initializationRetry);
       this.session.advance(); this.historyQueue.clear(); this.historyLoaded.clear(); this.ready = false; this.queued = [];
-      this.slash.clearResults();
+      this.slash.clearResults(); this.forwards.clear();
       this.notifications?.dispose(); clearInterval(this.notificationTimer); this.updateStatus('未连接');
     });
     this.client.on('event', event => {
@@ -308,7 +312,7 @@ export class QQApp implements vscode.Disposable {
         await oldStore.dispose();
       }
       if (!token.current() || this.stopped) return;
-      this.slash.requests.clear(); this.slash.clearResults(true);
+      this.slash.requests.clear(); this.slash.clearResults(true); this.forwards.clear();
       this.session.clearAccount(); this.historyLoaded.clear(); this.historyQueue.clear();
       this.target = undefined; this.editor.reset();
       const folder = path.join(this.context.globalStorageUri.fsPath, 'accounts', selfId);
@@ -605,6 +609,11 @@ export class QQApp implements vscode.Disposable {
       }));
     };
     const currentKey = (item?: (Chat & { account?: string }) | string): string | undefined => typeof item === 'string' ? item : item?.account && item.account !== this.store?.selfId ? undefined : item?.key ?? this.target;
+    register('qq.forwardMessage', () => this.forwards.forward());
+    register('qq.mergeForward', () => this.forwards.forward(true));
+    register('qq.viewForward', () => this.forwards.view());
+    register('qq.openForward', (uri: string, messageId: string, index: number) => this.forwards.open(uri, messageId, index));
+    register('qq.openForwardImage', (uri: string, messageId: string, index: number) => this.forwards.openImage(uri, messageId, index));
     register('qq.slash', (name?: string, invocation?: SlashInvocation) => this.slash.run(name, invocation));
     register('qq.openEmojiPicker', (invocation: SlashInvocation) => this.emojiCompletion.open(invocation));
     register('qq.connect', () => this.connect());

@@ -143,21 +143,32 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     const chat = this.chats.get(key);
     if (chat?.unread && !chat.replied) { chat.replied = true; this.changed(key, 'unread'); }
   }
-  enrichMessage(message: Message): void {
+  private updatePreview(message: Message): void {
+    const chat = this.chats.get(message.chatKey);
+    // Detail/receipt updates can arrive after a newer message in the same second.
+    // Only the current last message owns the preview, regardless of equal timestamps.
+    if (chat && this.messages.get(message.chatKey)?.at(-1)?.id === message.id) {
+      chat.lastTime = Math.max(chat.lastTime, message.time);
+      chat.preview = message.recalled ? '[消息已撤回]' : messageText(message).replace(/\s+/g, ' ').slice(0, 100);
+    }
+  }
+  enrichMessage(message: Message, refreshPreview = false): void {
     const messages = this.messages.get(message.chatKey);
     const index = messages?.findIndex(m => m.id === message.id) ?? -1;
     if (!messages || index < 0 || messages[index].recalled) return;
     messages[index] = { ...messages[index], ...message };
+    if (refreshPreview) this.updatePreview(messages[index]);
     this.trackOutbox(message.chatKey); this.dirty.add(message.chatKey); this.changed(message.chatKey);
   }
   settleOutgoing(key: string, localId: string, confirmed: Message): Message {
     const current = this.messages.get(key) ?? [];
     const local = current.find(m => m.id === localId);
     const echo = current.find(m => m.id !== localId && (m.id === confirmed.id || (m.senderId === this.selfId && !m.id.startsWith('local:') && confirmed.fileIds?.some(f => m.fileIds?.includes(f)))));
-    const message: Message = { ...confirmed, ...echo, sendState: 'sent', localImages: local?.localImages, outgoing: undefined, sendError: undefined };
+    const message: Message = { ...confirmed, ...echo, sendState: 'sent', localImages: local?.localImages, outgoing: undefined, forwardDelivery: undefined, sendError: undefined };
     const settled = current.filter(m => m.id !== message.id || m.id === localId).map(m => m.id === localId ? message : m);
     if (!local) settled.push(message);
     this.messages.set(key, mergeMessages([], settled, this.limit));
+    if (local?.forwardDelivery) this.updatePreview(message);
     this.trackOutbox(key); this.dirty.add(key); this.changed(key); return message;
   }
   setNotification(key: string, notification: Chat['notification']): void {

@@ -77,13 +77,6 @@ export class SlashCommands implements vscode.Disposable {
         if (target && await this.confirm(command, context, { user_id: target })) await call(chat.type === 'group' ? 'group_poke' : 'friend_poke', { ...(chat.type === 'group' ? { group_id: chat.id } : {}), user_id: target });
         return;
       }
-      if (command.special === 'forward') {
-        const messageId = await this.askMessage(store, chat, check); check(); if (!messageId) return;
-        const target = await vscode.window.showQuickPick([...store.chats.values()].map(c => ({ label: c.name, description: `${c.type === 'group' ? '群' : '好友'} ${c.id}`, value: c })), { title: '转发到哪个会话', matchOnDescription: true });
-        check(); if (!target) return;
-        if (await this.confirm(command, context, { message_id: messageId, target: `${target.value.name} (${target.value.id})` })) await call(target.value.type === 'group' ? 'forward_group_single_msg' : 'forward_friend_single_msg', { message_id: messageId, [target.value.type === 'group' ? 'group_id' : 'user_id']: target.value.id });
-        return;
-      }
       await executeSlashApi(command, context, {
         check: online,
         ask: field => field.kind === 'user' ? this.askUser(store, chat, check) : field.kind === 'message' ? this.askMessage(store, chat, check) : this.askField(field, name),

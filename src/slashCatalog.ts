@@ -9,7 +9,7 @@ export interface SlashField {
 }
 export interface SlashCommand {
   name: string; description: string; category: string; scope?: SlashScope;
-  local?: string; special?: 'help' | 'reply' | 'requests' | 'files' | 'forward' | 'poke';
+  local?: string; special?: 'help' | 'reply' | 'requests' | 'files' | 'poke';
   action?: string; fields?: SlashField[]; defaults?: Record<string, unknown>;
   group?: boolean; mutation?: boolean; confirm?: string; sensitive?: boolean;
 }
@@ -41,8 +41,9 @@ export const slashCommands: readonly SlashCommand[] = [
   { name: 'help', description: '查看全部英文指令及中文说明', category: '帮助', special: 'help' },
   change('recall', '撤回所选消息', 'delete_msg', [message]),
   query('message', '查看消息详情', 'get_msg', [message]),
-  query('forward_info', '查看合并转发内容', 'get_forward_msg', [text('id', '合并转发 ID 或消息 ID')]),
-  { name: 'forward', description: '转发：选择消息和目标会话', category: '操作', special: 'forward', mutation: true },
+  local('forward_info', '查看合并转发内容', 'qq.viewForward'),
+  local('forward', '转发：选择消息和目标会话', 'qq.forwardMessage'),
+  local('merge_forward', '选择多条消息合并转发', 'qq.mergeForward'),
   change('like', '给好友资料点赞', 'send_like', [user(), integer('times', '点赞次数', '1', 1, 10)]),
   { name: 'poke', description: '戳一戳当前好友或群成员', category: '操作', special: 'poke', mutation: true },
   query('login', '查看当前登录账号', 'get_login_info'),

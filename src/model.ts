@@ -17,6 +17,7 @@ export type Segment =
   | { type: 'mention'; qq: string; name?: string; text: string }
   | { type: 'file'; file: FileRef; text: string }
   | { type: 'face'; id: string; text: string }
+  | { type: 'forward'; id: string; text: string; content?: unknown[] }
   | { type: 'image'; image: ImageRef };
 // Read v2 caches without guessing identities from ordinary text like "@123".
 export function normalizeSegments(segments: unknown[]): Segment[] {
@@ -25,6 +26,7 @@ export function normalizeSegments(segments: unknown[]): Segment[] {
     const s = value as Record<string, any>;
     if (s.type === 'image' && s.image && typeof s.image.file === 'string') return [{ type: 'image', image: s.image }];
     if (typeof s.text !== 'string') return [];
+    if (s.type === 'forward' && typeof s.id === 'string') return [{ type: 'forward', id: s.id, text: '[合并转发]', ...(Array.isArray(s.content) ? { content: s.content } : {}) }];
     if ((s.type === 'file' || s.type === 'text') && s.file && typeof s.file.name === 'string') return [{ type: 'file', file: s.file, text: s.text }];
     const qq = s.type === 'mention' ? s.qq : s.type === 'text' ? s.at : undefined;
     if (typeof qq === 'string') return [{ type: 'mention', qq, name: s.name ?? s.atName, text: s.text }];
@@ -42,6 +44,7 @@ export interface Message {
   sendError?: string;
   sendProgress?: { stage: 'upload' | 'confirm'; sent: number; total: number; bytesPerSecond?: number };
   outgoing?: Draft;
+  forwardDelivery?: boolean;
   localImages?: Attachment[];
   fileIds?: string[];
 }
@@ -127,6 +130,16 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
       }
       case 'image': result.segments.push({ type: 'image', image: { file: String(data.file ?? data.file_id ?? ''), url: typeof data.url === 'string' ? data.url : undefined } }); break;
       case 'face': result.segments.push({ type: 'face', id: id(data.id), text: `[表情:${inline(data.id)}]` }); break;
+      case 'forward': result.segments.push({ type: 'forward', id: id(data.id ?? data.resid), text: '[合并转发]', ...(Array.isArray(data.content) ? { content: data.content } : {}) }); break;
+      case 'json': {
+        let forwardId = '';
+        try {
+          const card = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
+          if (card?.app === 'com.tencent.multimsg') forwardId = id(card.meta?.detail?.resid);
+        } catch { /* Ordinary or malformed cards remain text placeholders. */ }
+        result.segments.push(forwardId ? { type: 'forward', id: forwardId, text: '[合并转发]' } : { type: 'text', text: '[卡片]' });
+        break;
+      }
       case 'reply': result.replyId = id(data.id) || undefined; break;
       case 'at': {
         const qq = id(data.qq);
@@ -143,7 +156,7 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
   return result;
 }
 export const messageText = (message: Message): string => message.segments.map(s => s.type === 'image' ? '[图片]' : s.text).join('');
-export const isPending = (m: Message): boolean => !!m.outgoing && !['sent', 'cancelled'].includes(m.sendState ?? '');
+export const isPending = (m: Message): boolean => (!!m.outgoing || !!m.forwardDelivery) && !['sent', 'cancelled'].includes(m.sendState ?? '');
 export function mergeMessages(history: Message[], live: Message[], limit: number): Message[] {
   const values = new Map<string, Message>();
   // A late history/detail response must not restore a recalled message.
@@ -153,5 +166,7 @@ export function mergeMessages(history: Message[], live: Message[], limit: number
   }
   const sorted = [...values.values()].sort((a, b) => a.time - b.time);
   const retained = sorted.filter(m => !isPending(m)).slice(-limit);
-  return [...retained, ...sorted.filter(isPending)].sort((a, b) => a.time - b.time);
+  // Keep the stable order of equal-second messages when retaining pending sends.
+  const retainedIds = new Set(retained.map(m => m.id));
+  return sorted.filter(m => isPending(m) || retainedIds.has(m.id));
 }

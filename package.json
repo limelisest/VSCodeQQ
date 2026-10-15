@@ -236,6 +236,18 @@
       {
         "command": "qq.toggleCollapsed",
         "title": "QQ: 放入 / 移出收纳箱"
+      },
+      {
+        "command": "qq.forwardMessage",
+        "title": "QQ: 转发这条消息"
+      },
+      {
+        "command": "qq.mergeForward",
+        "title": "QQ: 选择消息合并转发"
+      },
+      {
+        "command": "qq.viewForward",
+        "title": "QQ: 查看合并转发"
       }
     ],
     "menus": {
@@ -345,6 +357,21 @@
           "command": "qq.mentionSender",
           "when": "resourceScheme == qqchat && resourcePath =~ /^\\/group\\//",
           "group": "qq@2"
+        },
+        {
+          "command": "qq.forwardMessage",
+          "when": "resourceScheme == qqchat",
+          "group": "qq@4"
+        },
+        {
+          "command": "qq.mergeForward",
+          "when": "resourceScheme == qqchat",
+          "group": "qq@4"
+        },
+        {
+          "command": "qq.viewForward",
+          "when": "resourceScheme == qqchat",
+          "group": "qq@4"
         }
       ],
       "commandPalette": [

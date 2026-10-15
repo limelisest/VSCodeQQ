@@ -3,7 +3,7 @@ import { CodeLanguage, codeStyle } from './codeStyle';
 
 export interface Span { line: number; start: number; end: number; messageId: string; imageIndex: number; }
 export interface MentionSpan { line: number; start: number; end: number; qq: string; name: string; }
-export interface Rendered { text: string; images: Span[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
+export interface Rendered { text: string; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
 // Escape only the display projection; copy/reply/send continue using the original message.
 export const codeString = (text: string): string => JSON.stringify(text).slice(1, -1)
   .replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -12,7 +12,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
   const escape = (text: string) => style.escape(codeString(text));
   const quote = (text: string) => `"${escape(text)}"`;
   const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} 底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 右键回复 · 图片悬浮预览`, ''];
-  const rendered: Rendered = { text: '', images: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
+  const rendered: Rendered = { text: '', forwards: [], images: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
   const byId = new Map(messages.map(m => [m.id, m]));
   let lastDay = '';
   for (const m of messages) {
@@ -29,6 +29,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     const target = m.replyId ? byId.get(m.replyId) : undefined;
     const tags = [self ? '我' : '', m.senderRole === 'owner' ? '群主' : m.senderRole === 'admin' ? '管理员' : '', !self && m.mentioned ? '@我' : '', !self && (m.replyToSelf || target?.senderId === selfId) ? '回复我' : ''].filter(Boolean);
     let state = m.sendState ? ({ queued: '等待发送…', sending: '发送中…', sent: '', failed: '发送失败 · [重试]', uncertain: '结果未确认 · [重试]', cancelled: '' })[m.sendState] : '';
+    if (m.forwardDelivery) state = state.replace(' · [重试]', '');
     if (m.sendState === 'sending' && m.sendProgress) {
       const p = m.sendProgress, percent = p.total ? Math.min(100, Math.floor(p.sent / p.total * 100)) : 0;
       const filled = Math.floor(percent / 10);
@@ -70,11 +71,14 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     };
     // The field itself remains an accessible reply target for empty/image-only messages.
     const msgStart = current.indexOf('msg'); replySpan(msgStart, msgStart + 3);
-    let imageIndex = 0, fileIndex = 0;
+    let imageIndex = 0, fileIndex = 0, forwardIndex = 0;
     for (const part of m.segments) {
       if (part.type === 'image') {
         rendered.images.push({ line: lines.length, start: current.length, end: current.length + 4, messageId: m.id, imageIndex: imageIndex++ });
         current += '[图片]';
+      } else if (part.type === 'forward') {
+        rendered.forwards.push({ line: lines.length, start: current.length, end: current.length + part.text.length, messageId: m.id, forwardIndex: forwardIndex++ });
+        current += part.text;
       } else if (part.type === 'mention' && chat.type === 'group') {
         const text = escape(part.text);
         rendered.mentions.push({ line: lines.length, start: current.length, end: current.length + text.length, qq: part.qq, name: part.name || part.qq });

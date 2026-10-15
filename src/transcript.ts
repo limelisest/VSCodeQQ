@@ -53,6 +53,11 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       const link = new vscode.DocumentLink(this.range(span), this.command(doc.uri, span));
       link.tooltip = '打开 QQ 图片'; return link;
     });
+    for (const span of this.rendered.get(key)?.forwards ?? []) {
+      const target = vscode.Uri.parse(`command:qq.openForward?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId, span.forwardIndex]))}`);
+      const link = new vscode.DocumentLink(new vscode.Range(span.line, span.start, span.line, span.end), target);
+      link.tooltip = '查看合并转发'; links.push(link);
+    }
     for (const span of this.rendered.get(key)?.files ?? []) {
       const target = vscode.Uri.parse(`command:qq.downloadFile?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId, span.fileIndex]))}`);
       const link = new vscode.DocumentLink(new vscode.Range(span.line, span.start, span.line, span.end), target);
@@ -76,6 +81,8 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const key = this.key(doc.uri), content = key && this.rendered.get(key);
     if (!content) return;
     const contains = (span: { line: number; start: number; end: number }) => span.line === pos.line && span.start <= pos.character && pos.character < span.end;
+    const forward = content.forwards.find(contains);
+    if (forward) return vscode.Uri.parse(`command:qq.openForward?${encodeURIComponent(JSON.stringify([doc.uri.toString(), forward.messageId, forward.forwardIndex]))}`);
     const mention = content.mentions.find(contains);
     if (mention) return this.mentionCommand(doc.uri, mention.qq, mention.name);
     const reply = content.actions.find(a => a.kind === 'reply' && contains(a));

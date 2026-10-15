@@ -6,6 +6,7 @@ import type { QQApp } from '../src/extension';
 import { MockNapCat, png, tallPng, widePng, until } from './fixture';
 import { DRAFT_DIVIDER } from '../src/nativeEditor';
 import { TestUI } from './ui';
+import { testForwardCommands } from './forwardExtension';
 import { testSlashCommands } from './slashExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
 import { testReplyPlaceholder } from './replyExtension';
@@ -53,6 +54,14 @@ export async function run(): Promise<void> {
     await until(() => settingsReady);
     checks.push('连接设置页面入口、输入校验、Token 保留/清除/不回传、独立测试连接');
     await app.settings.handle({ action: 'connect', ...form, token: '', clearToken: true }); assert.equal(app.ready, true); checks.push('设置页保存并连接、NapCat 握手与会话列表');
+    if (process.env.QQ_TEST_FORWARD_ONLY === '1') {
+      ui = await TestUI.connect();
+      await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testForwardCommands(app, backend, ui, checks);
+      console.log(`QQ forward integration: ${checks.length} checks passed`);
+      return;
+    }
     assert.equal(app.trees.length, 1);
     assert.equal(app.trees.find(t => t.section === 'list')?.getChildren().length, 3);
     await vscode.commands.executeCommand('qq.show.list');
@@ -458,7 +467,7 @@ export async function run(): Promise<void> {
     console.log('key trace', await ui.evaluate('window.__qqKeys'), app.native.inDraft(editor), JSON.stringify(app.native.draft(editor.document)));
     await until(() => app!.native.draft(editor.document).endsWith('\n'));
     assert.equal(backend.sent.length, sentCount);
-    await ui.enter(2); // Ctrl+Enter.
+    await ui.enter(process.platform === 'darwin' ? 4 : 2); // Cmd+Enter on macOS, Ctrl+Enter elsewhere.
     await until(() => app!.native.draft(editor.document).endsWith('\n\n'));
     assert.equal(backend.sent.length, sentCount);
     await ui.enter();
@@ -1030,6 +1039,8 @@ export async function run(): Promise<void> {
     checks.push('搜索后 Enter 打开正确会话并清空搜索返回完整列表，方向键选择和收纳箱搜索同样生效');
     await testReplyPlaceholder(app, backend, checks);
     await testEmojiShortcuts(app, backend, ui, checks);
+    await testForwardCommands(app, backend, ui, checks);
+    console.log('Forward integration: passed');
     await testSlashCommands(app, backend, ui, checks);
     await app.store!.flush();
     await fs.writeFile(path.join(output, 'extension-result.json'), JSON.stringify({ passed: checks, simulatedSends: backend.sent.length, realSends: 0 }, null, 2));
