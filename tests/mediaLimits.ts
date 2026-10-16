@@ -13,7 +13,7 @@ import { ChatStore } from '../src/store';
 import { newChat } from '../src/model';
 import { OutboxService } from '../src/outbox';
 import { AccountSession } from '../src/accountSession';
-import { MockNapCat, png } from './fixture';
+import { MockNapCat, png, tallPng } from './fixture';
 
 test('超过 16 MB 的图片惰性流式下载，兼容已知长度和分块响应，缓存可复用', async () => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-large-image-'));
@@ -78,4 +78,20 @@ test('大图片导入、读取、十三个附件混排发送，分片上传且�
     assert.ok(backend.calls.filter(c => c.action === 'upload_file_stream' && c.params.chunk_data).every(c => Buffer.from(c.params.chunk_data, 'base64').length <= 512 * 1024));
     assert.equal(backend.fileUploads.length, 0, '图片不可被当成文件发送');
   } finally { client.dispose(); await backend.close(); await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
+});
+
+
+test('同名图片使用各自资源地址，不能串用下载中或已缓存的图片', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-image-identity-'));
+  const backend = new MockNapCat(), client = new OneBotClient(); await backend.start();
+  try {
+    const cache = new MediaCache(folder, client);
+    const [a, b] = await Promise.all([
+      cache.get({ file: 'image.png', url: backend.imageUrl }),
+      cache.get({ file: 'image.png', url: backend.imageUrl + '?tall' })
+    ]);
+    assert.notEqual(a, b);
+    assert.deepEqual(await fs.readFile(a), png); assert.deepEqual(await fs.readFile(b), tallPng);
+    assert.equal(await cache.get({ file: 'image.png', url: backend.imageUrl + '?tall' }), b);
+  } finally { client.dispose(); await backend.close(); await fs.rm(folder, { recursive: true, force: true }); }
 });

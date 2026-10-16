@@ -3,7 +3,7 @@
   const $ = id => document.getElementById(id);
   const grids = { Favorites: $('favoriteFaces'), Recent: $('recentFaces'), Basic: $('basicFaces') };
   const previews = new Map();
-  let state = {}, active = 'Favorites', choosing = false, focusFavorites = false, faceCount = 48, more = false;
+  let state = {}, opened = false, active = 'Favorites', choosing = false, focusFavorites = false, faceCount = 48, more = false;
   const post = (type, extra = {}) => api.postMessage({ type, account: state.account, key: state.key, ...extra });
   const status = (id, text) => { $(id).textContent = text; $(id).hidden = !text; };
   const focus = button => { if (button) { button.focus(); button.scrollIntoView({ block: 'nearest' }); } };
@@ -52,9 +52,13 @@
   });
   window.addEventListener('message', ({ data }) => {
     if (data.type === 'state') {
-      if (state.account !== data.account || state.key !== data.key) { observer.disconnect(); previews.clear(); for (const grid of Object.values(grids)) grid.replaceChildren(); choosing = false; status('error', ''); }
+      const changed = state.account !== data.account || state.key !== data.key || state.ready !== data.ready;
+      if (changed) { observer.disconnect(); previews.clear(); for (const grid of Object.values(grids)) grid.replaceChildren(); choosing = false; status('error', ''); }
       state = data;
-    } else if (data.type === 'showEmojis') { choosing = false; focusFavorites = true; more = false; tab('Favorites'); $('closeEmojis').focus(); load(48); }
+      if (changed && opened && data.visible && data.account && data.key) {
+        focusFavorites = false; more = false; tab(active); load(48);
+      }
+    } else if (data.type === 'showEmojis') { opened = true; choosing = false; focusFavorites = true; more = false; tab('Favorites'); $('closeEmojis').focus(); load(48); }
     else if (data.account === state.account && data.key === state.key) {
       if (data.type === 'error') { choosing = false; status('error', data.message); status('favoriteStatus', ''); }
       else if (data.type === 'basicFaces') render(grids.Basic, data.faces.map(f => ({ id: 'face:' + f.id, faceId: f.id, label: f.name, icon: f.icon })));

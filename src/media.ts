@@ -100,7 +100,7 @@ export class MediaCache {
     void task.then(() => this.pending.delete(key), () => this.pending.delete(key)); return task;
   }
   get(ref: ImageRef): Promise<string> {
-    const key = createHash('sha256').update(ref.file || ref.url || '').digest('hex');
+    const key = createHash('sha256').update(JSON.stringify([ref.file, ref.url])).digest('hex');
     let task = this.pending.get(key);
     if (!task) {
       task = this.limited(() => this.resolve(key, ref)).finally(() => this.pending.delete(key));
