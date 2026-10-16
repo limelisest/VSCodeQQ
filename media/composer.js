@@ -60,9 +60,14 @@
       }
     } else if (data.type === 'showEmojis') { opened = true; choosing = false; focusFavorites = true; more = false; tab('Favorites'); $('closeEmojis').focus(); load(48); }
     else if (data.account === state.account && data.key === state.key) {
-      if (data.type === 'error') { choosing = false; status('error', data.message); status('favoriteStatus', ''); }
+      if (data.type === 'selectionComplete') choosing = false;
+      else if (data.type === 'error') { choosing = false; status('error', data.message); status('favoriteStatus', ''); }
       else if (data.type === 'basicFaces') render(grids.Basic, data.faces.map(f => ({ id: 'face:' + f.id, faceId: f.id, label: f.name, icon: f.icon })));
-      else if (data.type === 'recentFaces') render(grids.Recent, data.entries);
+      else if (data.type === 'recentFaces') {
+        const selected = grids.Recent.contains(document.activeElement) ? document.activeElement.dataset.id : undefined;
+        render(grids.Recent, data.entries);
+        if (selected) focus([...grids.Recent.querySelectorAll('button')].find(button => button.dataset.id === selected));
+      }
       else if (data.type === 'favoriteFaces') {
         render(grids.Favorites, data.entries); status('favoriteStatus', ''); more = data.more; tab(active);
         if (focusFavorites) { focus(grids.Favorites.querySelector('button')); focusFavorites = false; }

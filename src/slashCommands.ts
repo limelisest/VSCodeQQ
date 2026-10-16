@@ -63,7 +63,10 @@ export class SlashCommands implements vscode.Disposable {
       };
       try {
         check(); this.host.target = chat.key;
-        if (command.local) { await vscode.commands.executeCommand(command.local, ...(['qq.toggleFavorite', 'qq.toggleCollapsed', 'qq.markRead', 'qq.toggleIgnoreUnread'].includes(command.local) ? [chat.key] : [])); return; }
+        if (command.local) {
+          const args = command.local === 'qq.emojis' ? [{ autoClose: true }] : ['qq.toggleFavorite', 'qq.toggleCollapsed', 'qq.markRead', 'qq.toggleIgnoreUnread'].includes(command.local) ? [chat.key] : [];
+          await vscode.commands.executeCommand(command.local, ...args); return;
+        }
         if (command.special === 'reply') {
           const value = await this.askMessage(store, chat, check); check();
           if (value && uri) await vscode.commands.executeCommand('qq.reply', uri.toString(), value); return;

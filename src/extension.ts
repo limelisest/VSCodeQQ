@@ -402,6 +402,7 @@ export class QQApp implements vscode.Disposable {
         const key = splitKey(message.chatKey);
         store.upsert(newChat(key.type, key.id, key.type === 'private' ? message.senderName : key.id));
       }
+      if (this.outbox.observeEcho(store, event, message)) return;
       if (message.senderId === store.selfId && message.fileIds?.length) {
         const local = store.messages.get(message.chatKey)?.find(m => m.id.startsWith('local:') && m.fileIds?.some(f => message.fileIds!.includes(f)));
         if (local) { store.settleOutgoing(message.chatKey, local.id, { ...local, ...message }); return; }
@@ -751,7 +752,7 @@ export class QQApp implements vscode.Disposable {
     register('qq.mentionMember', () => this.mentionMember());
     register('qq.mentionSender', () => this.mentionMember(true));
     register('qq.insertMention', (uri: string, qq: string, name?: string) => this.insertMention(uri, qq, name, true));
-    register('qq.emojis', () => this.emojis.showEmojis());
+    register('qq.emojis', (options?: { autoClose?: boolean }) => this.emojis.showEmojis(options?.autoClose === true));
     register('qq.cancelReply', async (uri?: string, expectedToken?: string) => {
       const editor = typeof uri === 'string' ? vscode.window.visibleTextEditors.find(e => e.document.uri.toString() === uri) : vscode.window.activeTextEditor;
       const key = editor && this.transcript?.key(editor.document.uri) || (!uri ? this.target : undefined);

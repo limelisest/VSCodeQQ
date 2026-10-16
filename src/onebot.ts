@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import WebSocket from 'ws';
+import { isNapCatEventTimeout } from './requestFailure';
 
 export class OneBotRequestError extends Error {
   constructor(readonly kind: 'rejected' | 'timeout' | 'disconnected' | 'transport', message: string) { super(message); }
@@ -52,9 +53,10 @@ export class OneBotClient extends EventEmitter {
           this.pending.delete(echo); clearTimeout(pending.timer);
           if (data.status === 'failed' || (data.retcode != null && Number(data.retcode) !== 0)) {
             let detail = [...new Set([data.message, data.wording].filter((v): v is string => typeof v === 'string' && !!v.trim()))].join('；');
+            const kind = isNapCatEventTimeout(detail) ? 'timeout' : 'rejected';
             if (this.token) detail = detail.split(this.token).join('[已隐藏 Token]');
             detail = detail.replace(/[\r\n]+/g, ' ').slice(0, 1000);
-            pending.reject(new OneBotRequestError('rejected', `NapCat ${pending.action} 请求失败 (${Number(data.retcode) || 'failed'})${detail ? `：${detail}` : ''}`));
+            pending.reject(new OneBotRequestError(kind, `NapCat ${pending.action} 请求失败 (${Number(data.retcode) || 'failed'})${detail ? `：${detail}` : ''}`));
           }
           else pending.resolve(data.data);
         } else if (data.post_type) this.emit('event', data);

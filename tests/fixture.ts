@@ -1,7 +1,9 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer, Server } from 'node:http';
+import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 export const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64');
+export const sendEventTimeout = 'Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate EventRet: {}';
 export const videoBytes = Buffer.from('000000186674797069736f6d0000020069736f6d69736f32', 'hex');
 function samplePng(width: number, height: number): Buffer {
   const chunk = (name: string, data: Buffer) => {
@@ -30,12 +32,14 @@ export class MockNapCat {
   sendDelay = 0;
   detailDelay = 0;
   emitSent = true;
+  emitSentDelay = 0;
   listDelay = 0;
   listResponses = 0;
   historyDelay = 0;
   historyDelays = new Map<string, number>();
   historyFailures = new Set<string>();
   failSend = false;
+  sendFailure?: { retcode: number; message?: string; wording?: string };
   rejectedActions = new Set<string>();
   actionDelays = new Map<string, number>();
   fileUploads: any[] = [];
@@ -135,10 +139,23 @@ export class MockNapCat {
           if (this.sendDelay) await new Promise(resolve => setTimeout(resolve, this.sendDelay));
           if (this.failSend) { respond(null, 'failed'); break; }
           const message_id = ++this.sequence;
-          const message = req.params.message.map((s: any) => s.type === 'image' ? { type: 'image', data: { file: `sent-${message_id}.png`, url: this.imageUrl } } : s);
+          const message = req.params.message.map((s: any) => {
+            if (!['image', 'video'].includes(s.type)) return s;
+            const source = s.data.file;
+            const bytes = source.startsWith('base64://') ? Buffer.from(source.slice(9), 'base64') : this.uploadedBytes.get(source);
+            const digest = bytes ? createHash('md5').update(bytes).digest('hex') : `sent-${message_id}`;
+            return { type: s.type, data: { file: `${digest}.${s.type === 'image' ? 'png' : 'mp4'}`, url: this.imageUrl } };
+          });
           const event = { ...this.message(message_id), post_type: 'message_sent', message_type: req.params.message_type, group_id: req.params.group_id, target_id: req.params.user_id, user_id: 123456, sender: { user_id: 123456, nickname: '我' }, message };
           this.sentMessages.set(message_id, event);
-          if (this.emitSent) this.emit(event); respond({ message_id }); break;
+          if (this.emitSent) {
+            if (this.emitSentDelay) setTimeout(() => this.emit(event), this.emitSentDelay);
+            else this.emit(event);
+          }
+          if (this.sendFailure) {
+            if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ status: 'failed', ...this.sendFailure, data: null, echo: req.echo }));
+          } else respond({ message_id });
+          break;
         }
         case 'timeout': break;
         case 'disconnect': socket.close(); break;

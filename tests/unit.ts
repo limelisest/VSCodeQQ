@@ -21,12 +21,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { once } from 'node:events';
 import { newChat, parseMessage, messageText, mergeMessages, draftParts } from '../src/model';
-import { OneBotClient } from '../src/onebot';
+import { OneBotClient, OneBotRequestError } from '../src/onebot';
 import { ChatStore } from '../src/store';
 import { MediaCache, imageExtension, previewDimensions } from '../src/media';
 import { allowsUnread, groupNotification, NotificationSync } from '../src/notifications';
 import { AttachmentFiles } from '../src/attachments';
-import { MockNapCat, png } from './fixture';
+import { MockNapCat, sendEventTimeout, png } from './fixture';
 import { codeLanguages, codeStyle, isCodeLanguage } from '../src/codeStyle';
 
 test('八种代码风格保留原文、图片、引用和操作位置', () => {
@@ -526,4 +526,35 @@ test('msg 回复与 name 提及仅绑定变量，正文可复制，发送成功�
     const sending = renderTranscript(newChat('group', 1, '群'), [{ ...message, senderId: '123', sendState: 'sending' }], '123', language);
     assert.ok(sending.text.includes('发送中'), language);
   }
+});
+
+
+test('NapCat 的 NTEvent 超时报文归为未确认，其他 1200 错误仍为明确拒绝', async () => {
+  const backend = new MockNapCat(); await backend.start(); const client = new OneBotClient();
+  try {
+    await client.connect(backend.url); backend.emitSent = false;
+    for (const failure of [{ retcode: 1200, message: sendEventTimeout }, { retcode: 1200, message: 'API error', wording: sendEventTimeout }]) {
+      backend.sendFailure = failure;
+      await assert.rejects(client.call('send_msg', { message: [], message_type: 'group', group_id: 1 }), error => error instanceof OneBotRequestError && error.kind === 'timeout');
+    }
+    backend.sendFailure = { retcode: 1200, message: '无权限，操作失败' };
+    await assert.rejects(client.call('send_msg', { message: [], message_type: 'group', group_id: 1 }), error => error instanceof OneBotRequestError && error.kind === 'rejected');
+  } finally { client.dispose(); await backend.close(); }
+});
+
+test('旧缓存中 NTEvent 发送失败恢复为未确认，普通失败保留原状态', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-timeout-restore-'));
+  const store = new ChatStore(folder, '123');
+  const make = (message_id: string, error: string) => ({ ...parseMessage({ message_id, user_id: 123, message: [{ type: 'text', data: { text: message_id } }] }, 'group:1', '123'),
+    sendState: 'failed', sendError: error, outgoing: { text: message_id, attachments: [], version: 0 } });
+  const messages = [make('local:1', sendEventTimeout), make('local:2', '权限不足')];
+  try {
+    await fs.writeFile(path.join(folder, 'state.json'), JSON.stringify({ chats: [newChat('group', 1, '测试')], outbox: messages }));
+    await fs.writeFile(path.join(folder, 'group-1.json'), JSON.stringify(messages));
+    await store.restore();
+    assert.equal(store.outbox.get('local:1')!.sendState, 'uncertain'); assert.equal(store.outbox.get('local:2')!.sendState, 'failed');
+    await store.load('group:1');
+    assert.equal(store.messages.get('group:1')!.find(m => m.id === 'local:1')!.sendState, 'uncertain');
+    assert.equal(store.messages.get('group:1')!.find(m => m.id === 'local:2')!.sendState, 'failed');
+  } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
 });

@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import type { QQApp } from '../src/extension';
-import { MockNapCat, until } from './fixture';
+import { MockNapCat, png, sendEventTimeout, until } from './fixture';
 import { TestUI } from './ui';
 
 export async function testOperationLocks(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
@@ -19,6 +19,38 @@ export async function testOperationLocks(app: QQApp, backend: MockNapCat, ui: Te
     assert.equal(calls('send_msg') - beforeSend, 1, '成功后的旧重发链接无效');
   } finally { backend.sendDelay = 0; }
   checks.push('重复点击重发只发送一次，成功后的旧重发链接不能再次发送');
+
+  for (const echoDelay of [0, 150]) {
+    const image = await app.attachments!.stage(png, 'timeout-echo.png'); app.store!.attach(key, [image]);
+    const before = calls('send_msg');
+    backend.sendFailure = { retcode: 1200, message: sendEventTimeout }; backend.emitSentDelay = echoDelay;
+    try {
+      const submission = app.outbox.submit(app.store!, key, app.store!.draft(key).text + `timeout-echo-${echoDelay}`);
+      const complete = await submission.completion;
+      if (!echoDelay) assert.equal(complete, true);
+      await until(() => !app.store!.messages.get(key)?.some(m => m.id === submission.messageIds[0]));
+      const matching = app.store!.messages.get(key)!.filter(m => m.segments.some(s => s.type === 'text' && s.text === `timeout-echo-${echoDelay}`));
+      assert.equal(matching.length, 1); assert.equal(matching[0].sendState, 'sent'); assert.equal(matching[0].sendError, undefined);
+      assert.equal(calls('send_msg') - before, 1); assert.equal(app.store!.draft(key).text, '');
+      await vscode.commands.executeCommand('qq.retryMessage', uri, submission.messageIds[0]);
+      assert.equal(calls('send_msg') - before, 1);
+    } finally { backend.sendFailure = undefined; backend.emitSentDelay = 0; }
+  }
+  checks.push('图片文字已发出但 NTEvent 超时时，早到或迟到的自身回显合并为一条成功消息，不重发');
+
+  backend.sendFailure = { retcode: 1200, message: sendEventTimeout }; backend.emitSent = false;
+  try {
+    const submission = app.outbox.submit(app.store!, key, 'timeout-without-echo');
+    assert.equal(await submission.completion, false);
+    assert.equal(app.store!.messages.get(key)!.find(m => m.id === submission.messageIds[0])!.sendState, 'uncertain');
+    const before = calls('send_msg');
+    const retry = vscode.commands.executeCommand('qq.retryMessage', uri, submission.messageIds[0]);
+    await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('消息发送结果未确认')`);
+    await ui.call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await ui.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await retry; assert.equal(calls('send_msg'), before);
+  } finally { backend.sendFailure = undefined; backend.emitSent = true; }
+  checks.push('NTEvent 超时且无回显时保留未确认，重试先确认，取消不会再次发送');
 
   const file = await app.attachments!.stageFile(Buffer.from('file echo with rejected ack'), '回执异常.txt');
   app.store!.attach(key, [file]); backend.fileEchoThenReject = true;

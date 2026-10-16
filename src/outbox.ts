@@ -1,6 +1,6 @@
 import { draftMentions } from './mentions';
 import * as fs from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { ChatStore } from './store';
 import { OneBotClient, OneBotRequestError } from './onebot';
 import { AttachmentFiles } from './attachments';
@@ -9,6 +9,8 @@ import { Attachment, Message, Segment, draftParts, outgoingDrafts, id, parseMess
 import { AccountSession } from './accountSession';
 import { OperationLocks } from './operationLocks';
 import { FileReceipt } from './fileReceipt';
+import { isNapCatEventTimeout } from './requestFailure';
+import { SendReceipt, SendReceipts, mediaDigest } from './sendReceipt';
 interface OutboxHost {
   store?: ChatStore; attachments?: AttachmentFiles; client: OneBotClient;
   session: AccountSession; ready: boolean; log(error: unknown): void;
@@ -23,6 +25,8 @@ export class OutboxService {
     if (!locks) { locks = new OperationLocks(); map.set(store, locks); }
     return locks;
   }
+  private receipts = new SendReceipts();
+  observeEcho(store: ChatStore, raw: unknown, message: Message): boolean { return this.receipts.observe(store, raw, message); }
   private cancelled = new Set<string>();
   private sendQueues = new Map<string, Promise<boolean>>();
   constructor(private host: OutboxHost) {}
@@ -54,7 +58,7 @@ export class OutboxService {
           : p.kind === 'image' ? [{ type: 'image' as const, image: { file: '' } }]
           : p.kind === 'video' ? [{ type: 'video' as const, video: { file: '', name: p.label }, text: '[视频]' }]
           : p.kind === 'file' ? [{ type: 'file' as const, file: { id: '', name: p.label, size: p.size }, text: p.placeholder ?? `[文件:${p.label}]` }]
-          : [{ type: 'text' as const, text: `[表情:${p.faceId}]` }])
+          : [{ type: 'face' as const, id: p.faceId ?? '', text: `[表情:${p.faceId}]` }])
       };
       store.add(local, false); messageIds.push(local.id);
       tasks.push(this.enqueue(store, local));
@@ -78,6 +82,9 @@ export class OutboxService {
       const message = current();
       if (store !== this.host.store || !message?.outgoing || message.recalled || !['failed', 'uncertain'].includes(message.sendState ?? '')) return false;
       if (!this.host.ready) throw new Error('NapCat 未连接，消息仍保留在记录中');
+      if (message.sendState === 'failed' && isNapCatEventTimeout(message.sendError)) {
+        message.sendState = 'uncertain'; store.enrichMessage(message);
+      }
       const state = message.sendState;
       if (state === 'uncertain' && !await confirm()) return false;
       const latest = current();
@@ -99,7 +106,7 @@ export class OutboxService {
     const files = this.host.attachments, epoch = this.host.session.generation;
     const task = previous.catch(() => false).then(async () => {
       let requested = false, fileRequested = false, confirmed = false;
-      let fileReceipt: FileReceipt | undefined;
+      let fileReceipt: FileReceipt | undefined, sendReceipt: SendReceipt | undefined;
       const checkCancelled = () => { if (this.cancelled.has(message.id)) throw new Error('已取消发送'); };
       try {
         checkCancelled();
@@ -145,6 +152,7 @@ export class OutboxService {
         }
         checkCancelled();
         const uploads = new Map<string, unknown>();
+        const mediaDigests = new Map<string, string>();
         let lastMediaUpdate = 0;
         for (const attachment of used) {
           if (uploads.has(attachment.id) || !['image', 'video'].includes(attachment.kind)) continue;
@@ -153,10 +161,12 @@ export class OutboxService {
           // use the same bounded-memory stream as video; this is not a size cap.
           if (attachment.kind === 'image' && (await fs.stat(source)).size <= 512 * 1024) continue;
           const check = () => { checkCancelled(); if (store !== this.host.store || epoch !== this.host.session.generation || !this.host.ready) throw new Error('连接已变化，资源上传已暂停'); };
+          const hash = createHash('md5');
           const remote = await uploadToNapCat(this.host.client, source, progress => {
             check(); message.sendProgress = progress;
             if (Date.now() - lastMediaUpdate > 200 || progress.stage === 'confirm') { lastMediaUpdate = Date.now(); store.enrichMessage(message); }
-          }, check);
+          }, check, bytes => hash.update(bytes));
+          mediaDigests.set(attachment.id, hash.digest('hex'));
           check(); uploads.set(attachment.id, { type: attachment.kind, data: { file: remote, ...(attachment.sticker ? { sub_type: 1 } : {}) } });
         }
         const regular = files ? await files.segments(used.filter(a => !uploads.has(a.id))) : [];
@@ -172,13 +182,32 @@ export class OutboxService {
           }
         }
         const chat = splitKey(message.chatKey);
+        const expected = parseMessage({ message: segments }, message.chatKey, store.selfId);
+        let mediaIndex = 0;
+        for (const segment of expected.segments) {
+          if (segment.type !== 'image' && segment.type !== 'video' && segment.type !== 'face') continue;
+          const attachment = used[mediaIndex++];
+          if (segment.type === 'face') continue;
+          const resource = segment.type === 'image' ? segment.image : segment.video;
+          resource.file = mediaDigests.get(attachment.id) ?? mediaDigest(resource.file) ?? '';
+        }
+        const timeout = uploads.size ? 30 * 60 * 1000 : 15000;
+        sendReceipt = this.receipts.begin(store, message, expected.segments, this.host.session.capture().signal, timeout);
         requested = true;
-        const result = await this.host.client.call('send_msg', { message_type: chat.type, [chat.type === 'group' ? 'group_id' : 'user_id']: chat.id, message: segments }, uploads.size ? 30 * 60 * 1000 : undefined);
+        const result = await this.host.client.call('send_msg', { message_type: chat.type, [chat.type === 'group' ? 'group_id' : 'user_id']: chat.id, message: segments }, timeout);
         const messageId = id(result?.message_id);
+        if (sendReceipt?.echo) {
+          // A different valid API ID proves a separate send. Keep both real
+          // messages if another client happened to send identical content.
+          if (/^-?[1-9]\d*$/.test(messageId) && messageId !== sendReceipt.echo.id) {
+            store.settleOutgoing(message.chatKey, message.id, { ...message, id: messageId, sendProgress: undefined });
+          }
+          return true;
+        }
         if (!/^-?\d+$/.test(messageId) || /^-?0+$/.test(messageId)) throw new Error('NapCat 未返回有效消息 ID，发送结果未确认，请先检查目标会话');
         message.sendProgress = undefined;
         const settled = store.settleOutgoing(message.chatKey, message.id, { ...message, id: messageId });
-        confirmed = true;
+        confirmed = true; sendReceipt?.close();
         if ((message.localImages?.length || message.localVideos?.length) && result?.message_id && store === this.host.store && epoch === this.host.session.generation) {
           void this.host.client.call('get_msg', { message_id: result.message_id }).then(raw => {
             if (store === this.host.store && epoch === this.host.session.generation && raw?.message && id(raw.message_id) === settled.id) store.enrichMessage(parseMessage(raw, message.chatKey, store.selfId));
@@ -188,7 +217,8 @@ export class OutboxService {
       } catch (error: any) {
         // A definitive success must survive later cache/detail errors. NapCat may
         // also reject upload_*_file after QQ has already accepted the file.
-        if (confirmed) { this.host.log(error); return true; }
+        if (confirmed || sendReceipt?.echo) { this.host.log(error); return true; }
+        if (error instanceof OneBotRequestError && error.kind === 'rejected') sendReceipt?.close();
         if (fileReceipt && store === this.host.store && epoch === this.host.session.generation && this.host.ready) {
           const echo = await fileReceipt.wait();
           if (echo && store === this.host.store && epoch === this.host.session.generation && this.host.ready) {
@@ -203,7 +233,9 @@ export class OutboxService {
         } else {
           message.sendState = fileRequested || requested && !(error instanceof OneBotRequestError && error.kind === 'rejected') ? 'uncertain' : 'failed';
           message.sendError = fileRequested
-            ? `文件已提交给 NapCat，可能已经发出。请先检查目标会话，避免重复发送。${error.message}` : error.message;
+            ? `文件已提交给 NapCat，可能已经发出。请先检查目标会话，避免重复发送。${error.message}`
+            : requested && isNapCatEventTimeout(error.message)
+              ? `NapCat 等待发送事件超时，消息可能已送达。请先检查目标会话，再决定是否重试。${error.message}` : error.message;
           if (fileRequested) this.host.log(`文件发送结果未确认：${error.message}`);
         }
         store.enrichMessage(message);

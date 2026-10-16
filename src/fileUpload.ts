@@ -6,7 +6,7 @@ import { Message } from './model';
 
 // Bounded memory: only one 512 KiB chunk is encoded at a time. No plugin file-size cap.
 export async function uploadToNapCat(client: OneBotClient, source: string,
-  progress: (value: NonNullable<Message['sendProgress']>) => void, check: () => void = () => {}): Promise<string> {
+  progress: (value: NonNullable<Message['sendProgress']>) => void, check: () => void = () => {}, onChunk?: (bytes: Buffer) => void): Promise<string> {
   const handle = await fs.open(source, 'r');
   try {
     const { size } = await handle.stat();
@@ -27,6 +27,7 @@ export async function uploadToNapCat(client: OneBotClient, source: string,
         filled += bytesRead;
       }
       check();
+      onChunk?.(buffer.subarray(0, length));
       const result = await client.call('upload_file_stream', {
         stream_id, chunk_data: buffer.subarray(0, length).toString('base64'), chunk_index: index,
         total_chunks, file_size: size, filename: `qq-${stream_id}${suffix}`, file_retention: 3600000

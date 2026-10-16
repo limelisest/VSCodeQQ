@@ -25,6 +25,6 @@ export class EmojiCompletion implements vscode.CompletionItemProvider {
     const key = editor && this.app.transcript?.key(editor.document.uri);
     if (!store || !key || this.app.session.generation !== invocation.generation || store.selfId !== invocation.account || editor?.document.uri.toString() !== invocation.uri) throw new Error('会话或连接已变化，请重新选择表情');
     this.app.target = key;
-    await this.app.emojis.showEmojis();
+    await this.app.emojis.showEmojis(true);
   }
 }

@@ -28,6 +28,7 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
   private panelRevision = 0;
   focused = false;
   private wantEmojis = false;
+  private autoClose = false;
   private webviewReady = false;
   private imports = new Map<string, object>();
   constructor(private context: vscode.ExtensionContext, private host: EmojiPickerHost) {}
@@ -76,7 +77,7 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
         await this.host.attachToDraft(key, [{ id: randomUUID(), kind: 'face', label: face.name, faceId: face.id }]);
         if (!current() || this.choosing !== choice) return;
         await this.remember(store.selfId, { id: `face:${face.id}`, kind: 'face', label: face.name, faceId: face.id });
-        if (current() && this.choosing === choice) await this.close();
+        if (current() && this.choosing === choice) await this.selectionComplete(store.selfId, key);
       } finally { if (this.choosing === choice) this.choosing = undefined; }
     } else if (data.type === 'faces') {
       const count = Math.min(500, Math.max(48, Number(data.count) || 48));
@@ -121,7 +122,7 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
         await this.host.attachToDraft(key, [attachment]);
         if (!valid()) return;
         await this.rememberImage(store.selfId, await fs.readFile(file), '收藏表情');
-        if (valid()) await this.close();
+        if (valid()) await this.selectionComplete(store.selfId, key);
       }
       } catch (error: any) {
         if (!valid()) return;
@@ -154,6 +155,11 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
     });
     this.post({ type: 'recentFaces', account, key, entries });
   }
+  private async selectionComplete(account: string, key: string): Promise<void> {
+    if (this.autoClose) { await this.close(); return; }
+    this.postRecent(account, key);
+    this.post({ type: 'selectionComplete', account, key });
+  }
   private async close(): Promise<void> {
     if (this.view?.visible) await vscode.commands.executeCommand('workbench.action.closePanel');
     await this.host.focusInput();
@@ -171,7 +177,8 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
       name: chat ? `${chat.name}（${chat.type === 'group' ? '群' : '好友'} ${chat.id}）` : '', ready: this.host.ready, visible: this.view.visible });
   }
   async focus(): Promise<void> { await this.host.focusInput(); }
-  async showEmojis(): Promise<void> {
+  async showEmojis(autoClose = false): Promise<void> {
+    this.autoClose = autoClose; this.invalidate();
     this.wantEmojis = true;
     await vscode.commands.executeCommand('qq.composer.focus');
     this.view?.show(false); this.update();

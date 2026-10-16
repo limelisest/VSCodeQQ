@@ -1,4 +1,5 @@
 import { restoreReply } from './replies';
+import { isNapCatEventTimeout } from './requestFailure';
 import { mentionText, restoredMentions } from './mentions';
 import { DraftService } from './draftService';
 import { EventEmitter } from 'node:events';
@@ -31,6 +32,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       for (const message of data.outbox ?? []) {
         if (!this.chats.has(message.chatKey) || !isPending(message)) continue;
         if (['sending', 'queued'].includes(message.sendState)) { message.sendState = 'uncertain'; message.sendError = '上次关闭时结果未确认，请检查聊天记录后重试'; }
+        if (message.sendState === 'failed' && isNapCatEventTimeout(message.sendError)) message.sendState = 'uncertain';
         message.segments = normalizeSegments(message.segments ?? []);
         this.outbox.set(message.id, message);
         this.messages.set(message.chatKey, [...this.messages.get(message.chatKey) ?? [], message]);
@@ -51,7 +53,10 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       try {
         const cached: Message[] = JSON.parse(await fs.readFile(this.file(key), 'utf8'));
         const valid = Array.isArray(cached) ? cached.filter(m => m.chatKey === key && typeof m.id === 'string' && Array.isArray(m.segments)) : [];
-        for (const m of valid) m.segments = normalizeSegments(m.segments);
+        for (const m of valid) {
+          m.segments = normalizeSegments(m.segments);
+          if (isPending(m) && m.sendState === 'failed' && isNapCatEventTimeout(m.sendError)) m.sendState = 'uncertain';
+        }
         for (const m of valid) if (m.sendState === 'sending' || m.sendState === 'queued') {
           m.sendState = 'uncertain'; m.sendError = '插件上次关闭时尚未确认结果，请检查聊天记录后再重试';
         }

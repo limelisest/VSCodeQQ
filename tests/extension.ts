@@ -16,6 +16,7 @@ import { testListSearch, testListActive } from './listSearchExtension';
 import { testSlashCommands } from './slashExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
 import { testEmojiPreviews } from './emojiPreviewExtension';
+import { testEmojiOpenModes } from './emojiModeExtension';
 import { testReplyPlaceholder } from './replyExtension';
 import { newChat } from '../src/model';
 import { allowsUnread } from '../src/notifications';
@@ -74,6 +75,7 @@ export async function run(): Promise<void> {
       await testResources(app, backend, ui, checks);
       await testForwardCommands(app, backend, ui, checks);
       await testEmojiPreviews(app, backend, ui, checks);
+      await testEmojiOpenModes(app, backend, ui, checks);
       console.log(`QQ forward integration: ${checks.length} checks passed`);
       return;
     }

@@ -9,7 +9,7 @@ export async function testEmojiPreviews(app: QQApp, backend: MockNapCat, ui: Tes
   const editor = vscode.window.activeTextEditor!, store = app.store!;
   store.setDraft('group:20002', '表情选择保留文字'); await app.native.sync(editor);
   const sent = backend.sent.length;
-  await vscode.commands.executeCommand('qq.emojis');
+  await app.slash.run('emoji', app.slash.capture(editor.document.uri));
   const panel = await ui.webview('#favoriteFaces');
   await until(async () => await panel.evaluate(`document.querySelectorAll('#favoriteFaces button').length === 2`));
   const decoded = `document.querySelectorAll('#favoriteFaces img').length === 2 && [...document.querySelectorAll('#favoriteFaces img')].every(image => image.complete && image.naturalWidth > 0 && !image.hidden)`;
