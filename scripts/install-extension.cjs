@@ -2,6 +2,7 @@
 const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { checkPackageVersion } = require('./version.cjs');
 if (process.platform !== 'win32') throw new Error('请用 Windows Node 运行安装脚本');
 const root = path.resolve(__dirname, '..');
 const installation = path.join(process.env.LOCALAPPDATA, 'Programs', 'Microsoft VS Code');
@@ -14,8 +15,8 @@ const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' };
 delete env.VSCODE_DEV;
 const { publisher, name, version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const identity = `${publisher}.${name}@${version}`.toLowerCase();
-const suffix = process.argv.includes('--release') ? '' : '-pre';
-const artifact = path.join(root, 'artifacts', `${name}-${version}${suffix}.vsix`);
+checkPackageVersion(version, process.argv.includes('--release'));
+const artifact = path.join(root, 'artifacts', `${name}-${version}.vsix`);
 if (!fs.existsSync(artifact)) throw new Error('请先打包 VSIX');
 let result = spawnSync(executable, [cli, '--install-extension', artifact, '--force'], { env, stdio: 'inherit', timeout: 120000 });
 if (result.status !== 0) process.exit(result.status ?? 1);

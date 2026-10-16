@@ -558,3 +558,27 @@ test('旧缓存中 NTEvent 发送失败恢复为未确认，普通失败保留�
     assert.equal(store.messages.get('group:1')!.find(m => m.id === 'local:2')!.sendState, 'failed');
   } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
 });
+
+
+test('网址后的换行使用独立字符串，正文与回复保留原文而不污染自动链接', () => {
+  const url = 'https://example.com/watch?v=1&x=2';
+  const raw = `${url}\n\n第二行\nhttps://example.com/end`;
+  const source = parseMessage({ message_id: 700, user_id: 2, sender: { user_id: 2, nickname: '成员' },
+    message: [{ type: 'text', data: { text: raw } }, { type: 'image', data: { file: 'image' } }] }, 'group:1');
+  const reply = parseMessage({ message_id: 701, user_id: 3,
+    message: [{ type: 'reply', data: { id: '700' } }, { type: 'text', data: { text: '回复正文' } }] }, 'group:1');
+  const snapshot = JSON.stringify([source, reply]);
+  for (const language of codeLanguages) {
+    const view = renderTranscript(newChat('group', 1, '群'), [source, reply], '123', language);
+    const expected = url + '"' + codeStyle(language).join + ' "\\n"';
+    assert.equal(view.text.split(expected).length - 1, 2, `${language}: 正文和回复中的 URL 与换行独立`);
+    assert.ok(!view.text.includes(url + '\\n'), language);
+    for (const image of view.images) assert.equal(view.text.split('\n')[image.line].slice(image.start, image.end), '[图片]');
+    if (language === 'c') {
+      const body = view.text.split('\n').filter(line => line.includes('char msg[]') || line.startsWith(codeStyle(language).continuation)).slice(0, 4).join('\n');
+      const decoded = [...body.matchAll(/"(?:\\.|[^"\\])*"/g)].map(match => JSON.parse(match[0])).join('');
+      assert.equal(decoded, raw + '[图片]', 'C 字符串拼接仍还原原始空行和换行');
+    }
+  }
+  assert.equal(JSON.stringify([source, reply]), snapshot);
+});

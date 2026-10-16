@@ -14,10 +14,11 @@ GitHub 账号与 Marketplace 发布者分别管理。需要先用微软账号登
 
 ## 构建安装包
 
-在项目根目录执行：
+明确发布正式版本时，在项目根目录执行：
 
 ```sh
 npm ci
+npm run version:release
 npm run build
 npm test
 npm run test:extension
@@ -35,9 +36,22 @@ npm run package -- --release
 3. 上传刚生成的 VSIX，检查展示名称、图标和说明后提交。
 4. 等待平台验证完成，在管理页检查发布状态。
 
-日常开发使用 `npm run package` 生成带预发行标记的 `-pre.vsix`，版本号保持不动；安装脚本默认安装开发包。只有明确发版时才执行以下正式发布流程，正式包安装使用 `node scripts/install-extension.cjs --release`。
+## 开发版本编号
 
-后续更新保留同一发布者与扩展名称，递增 `version`，同步更新 `package-lock.json` 和 `CHANGELOG.md` 后打包，在已有扩展中上传新版本。
+开发版本使用下一正式版本加 `-devN`，例如：
+
+```text
+0.2.18 → 0.2.19-dev1 → 0.2.19-dev2 → 0.2.19
+0.2.19 → 0.2.20-dev1 → 0.2.20-dev2 → 0.2.20
+```
+
+- `npm run version:dev`：从正式版开始下一补丁版本的 `dev1`；已有开发版则只增加开发号，`dev9` 后为 `dev10`。
+- `npm run package`：按当前版本打包，如 `artifacts/limelisest-napcat-qq-0.2.19-dev1.vsix`，带 VS Code 预发行标记。构建和打包不会自动改号。
+- `node scripts/install-extension.cjs`：安装当前开发包，并核对安装后的实际版本。
+
+明确要求正式发版时，执行 `npm run version:release`，例如将 `0.2.19-dev3` 转为 `0.2.19`，同步整理 `CHANGELOG.md`，再构建并执行 `npm run package -- --release`。正式包安装使用 `node scripts/install-extension.cjs --release`。
+
+版本命令同步更新 `package.json` 和 `package-lock.json`。后续更新保留同一发布者与扩展名称，在已有扩展中上传正式版本。开发版仅用于本地 VSIX 分发；[Marketplace 目前不支持 SemVer 开发后缀](https://code.visualstudio.com/api/working-with-extensions/publishing-extension#pre-release-extensions)，商店包使用去掉 `-devN` 后的正式版本。
 
 官方流程见 [Publishing Extensions](https://code.visualstudio.com/api/working-with-extensions/publishing-extension)。
 

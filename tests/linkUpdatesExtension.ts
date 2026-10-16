@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import type { QQApp } from '../src/extension';
+import { codeLanguages } from '../src/codeStyle';
 import { newChat, parseMessage } from '../src/model';
 import { MockNapCat, until } from './fixture';
 import { TestUI } from './ui';
@@ -117,6 +118,34 @@ export async function testLinkUpdates(app: QQApp, backend: MockNapCat, ui: TestU
     assert.equal(Object.values(store.draft(key).mentions ?? {})[0], source.senderId);
     assert.equal(store.draft(key).replyId, source.id); assert.equal(backend.sent.length, sent);
     checks.push('真实鼠标单击 msg 回复、name 提及，正文单击不触发，变量直接绘制下横线且悬浮提示可用');
+    const url = 'https://example.com/watch?v=1&x=2', second = 'https://example.com/second?q=test%20value';
+    const urlMessage = parseMessage({ message_id: 983110, user_id: 10001, time: source.time + 10,
+      message: [{ type: 'text', data: { text: `${url}\n${second}\n下一行` } }] }, key);
+    store.add(urlMessage, false);
+    store.add(parseMessage({ message_id: 983111, user_id: 10001, time: source.time + 11,
+      message: [{ type: 'reply', data: { id: urlMessage.id } }, { type: 'text', data: { text: '引用网址' } }] }, key), false);
+    const originalLanguage = app.config.codeLanguage;
+    try {
+      for (const language of codeLanguages) {
+        await vscode.workspace.getConfiguration('qq').update('codeLanguage', language, vscode.ConfigurationTarget.Global);
+        await app.native.sync(editor); await until(() => !app.native.isUpdating(doc));
+        const urls = (await vscode.commands.executeCommand<vscode.DocumentLink[]>('vscode.executeLinkProvider', doc.uri)).filter(link => link.target?.scheme === 'https');
+        for (const target of [url, second]) {
+          const expected = vscode.Uri.parse(target).toString();
+          const matching = urls.filter(link => link.target?.toString().startsWith(expected));
+          assert.equal(matching.length, 2, `${language}: 正文与回复各识别一次 ${target}`);
+          for (const link of matching) {
+            assert.equal(link.target!.toString(), expected, `${language}: 网址目标不能带换行转义`);
+            assert.equal(doc.getText(link.range), target, `${language}: 点击范围不能包含换行转义`);
+          }
+        }
+      }
+    } finally {
+      await vscode.workspace.getConfiguration('qq').update('codeLanguage', originalLanguage, vscode.ConfigurationTarget.Global);
+      await app.native.sync(editor);
+    }
+    checks.push('八种代码风格中的正文与回复网址保留正确目标和点击范围，换行不追加到网址');
+
   } finally {
     await app.native.sync(editor);
     if (!doc.isClosed) {

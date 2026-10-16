@@ -81,11 +81,12 @@ code --install-extension ./artifacts/limelisest-napcat-qq-0.2.18.vsix --force
 git clone https://github.com/limelisest/VSCodeQQ.git
 cd VSCodeQQ
 npm ci
+npm run version:dev
 npm run build
 npm run package
 ```
 
-默认生成开发包 `artifacts/<name>-<version>-pre.vsix`，带 VS Code 预发行标记，日常开发不递增版本号。明确发版时才更新版本并执行 `npm run package -- --release` 生成正式包。开发工具及其 GitHub 地址见[开发与依赖](#开发与依赖)。
+开发版本使用下一正式版本加 `-devN`：例如 `0.2.18` 发布后依次为 `0.2.19-dev1`、`0.2.19-dev2`，正式发布为 `0.2.19`。执行 `npm run version:dev` 开始下一版本开发或递增开发号，同步更新清单与锁文件；普通构建、打包不会自动改号。开发包为 `artifacts/<name>-<version>.vsix`，如 `limelisest-napcat-qq-0.2.19-dev1.vsix`。明确发版时执行 `npm run version:release` 去掉开发后缀，再执行 `npm run package -- --release` 生成正式包。开发工具及其 GitHub 地址见[开发与依赖](#开发与依赖)。
 
 ### 3. 配置 NapCat
 
