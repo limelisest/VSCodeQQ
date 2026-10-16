@@ -208,7 +208,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
   clearDraftIfVersion(key: string, version: number): boolean { return this.draftService.clearDraftIfVersion(key, version); }
   completeSend(key: string, captured: Draft): boolean { return this.draftService.completeSend(key, captured); }
   attach(key: string, attachments: Attachment[]): void { this.draftService.attach(key, attachments); }
-  prepareAttachments(key: string, attachments: Attachment[], baseText?: string): Attachment[] { return this.draftService.prepareAttachments(key, attachments, baseText); }
+  prepareAttachments(key: string, attachments: Attachment[]): Attachment[] { return this.draftService.prepareAttachments(key, attachments); }
   removeAttachment(key: string, id: string): void { this.draftService.removeAttachment(key, id); }
   private changed(key: string, kind: StoreChange = 'messages'): void { this.schedule(); this.emit('change', key, kind); }
   private schedule(): void {

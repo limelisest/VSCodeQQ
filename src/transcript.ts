@@ -1,6 +1,5 @@
 import { Rendered, Span, renderTranscript } from './transcriptRenderer';
 import * as vscode from 'vscode';
-import * as fs from 'node:fs/promises';
 import { ChatStore } from './store';
 import { MediaCache } from './media';
 import { AttachmentFiles } from './attachments';
@@ -12,6 +11,7 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
   readonly historyState = new Map<string, string>();
   readonly rendered = new Map<string, Rendered>();
   private uris = new Map<string, vscode.Uri>();
+  private linkCache = new Map<string, { rendered: Rendered; links: vscode.DocumentLink[] }>();
   constructor(readonly store: ChatStore, readonly media: MediaCache, private attachments?: AttachmentFiles) {}
   uri(chat: Chat): vscode.Uri {
     let value = this.uris.get(chat.key);
@@ -28,14 +28,18 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const key = `${parts[1]}:${parts[2]}`;
     try { splitKey(key); return this.store.chats.has(key) ? key : undefined; } catch { return; }
   }
-  provideTextDocumentContent(uri: vscode.Uri): string {
+  project(uri: vscode.Uri): { text: string; rendered?: Rendered } {
     const key = this.key(uri); const chat = key && this.store.chats.get(key);
-    if (!chat || !key) return '// 当前账号中没有这个会话，请从 QQ 列表重新打开。';
+    if (!chat || !key) return { text: '// 当前账号中没有这个会话，请从 QQ 列表重新打开。' };
     this.uris.set(key, uri);
     const content = renderTranscript(chat, this.store.displayMessages(key), this.store.selfId, configuredCodeLanguage());
-    this.rendered.set(key, content);
     const state = this.historyState.get(key);
-    return content.text + (state && !this.store.messages.get(key)?.length ? `\n// ${state}\n` : '');
+    return { text: content.text + (state && !this.store.messages.get(key)?.length ? `\n// ${state}\n` : ''), rendered: content };
+  }
+  provideTextDocumentContent(uri: vscode.Uri): string {
+    const projection = this.project(uri), key = this.key(uri);
+    if (key && projection.rendered) this.rendered.set(key, projection.rendered);
+    return projection.text;
   }
   messageAt(uri: vscode.Uri, line: number): Message | undefined {
     const key = this.key(uri); if (!key) return;
@@ -49,7 +53,10 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
   }
   provideDocumentLinks(doc: vscode.TextDocument): vscode.DocumentLink[] {
     const key = this.key(doc.uri); if (!key) return [];
-    const links = (this.rendered.get(key)?.images ?? []).map(span => {
+    const rendered = this.rendered.get(key); if (!rendered) return [];
+    const cached = this.linkCache.get(doc.uri.toString());
+    if (cached?.rendered === rendered) return cached.links;
+    const links = (rendered.images ?? []).map(span => {
       const link = new vscode.DocumentLink(this.range(span), this.command(doc.uri, span));
       link.tooltip = '打开 QQ 图片'; return link;
     });
@@ -68,15 +75,21 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       link.tooltip = '下载文件 / 另存为'; links.push(link);
     }
     for (const span of this.rendered.get(key)?.mentions ?? []) {
+      if (span.kind === 'sender') continue; // Native field clicks do not need delayed document-link styling.
       const link = new vscode.DocumentLink(new vscode.Range(span.line, span.start, span.line, span.end), this.mentionCommand(doc.uri, span.qq, span.name));
       link.tooltip = '点击加入 @ 到草稿'; links.push(link);
     }
     for (const action of this.rendered.get(key)?.actions ?? []) {
-      const target = action.kind === 'reply' ? this.replyCommand(doc.uri, action.messageId) : action.kind === 'cancel' ? vscode.Uri.parse(`command:qq.cancelMessage?${encodeURIComponent(JSON.stringify([doc.uri.toString(), action.messageId]))}`) : this.retryCommand(doc.uri, action.messageId);
+      if (action.kind === 'reply') continue;
+      const target = action.kind === 'cancel' ? vscode.Uri.parse(`command:qq.cancelMessage?${encodeURIComponent(JSON.stringify([doc.uri.toString(), action.messageId]))}`) : this.retryCommand(doc.uri, action.messageId);
       const link = new vscode.DocumentLink(new vscode.Range(action.line, action.start, action.line, action.end), target);
-      link.tooltip = action.kind === 'reply' ? '点击回复这条消息' : action.kind === 'cancel' ? '取消尚未提交的消息' : '重新发送这条消息'; links.push(link);
+      link.tooltip = action.kind === 'cancel' ? '取消尚未提交的消息' : '重新发送这条消息'; links.push(link);
     }
-    return links;
+    const identity = (link: vscode.DocumentLink) => JSON.stringify([link.range.start.line, link.range.start.character, link.range.end.line, link.range.end.character, link.target?.toString(), link.tooltip]);
+    const previous = new Map(cached?.links.map(link => [identity(link), link]));
+    const stable = links.map(link => previous.get(identity(link)) ?? link);
+    this.linkCache.set(doc.uri.toString(), { rendered, links: stable });
+    return stable;
   }
   private mentionCommand(uri: vscode.Uri, qq: string, name: string): vscode.Uri {
     return vscode.Uri.parse(`command:qq.insertMention?${encodeURIComponent(JSON.stringify([uri.toString(), qq, name]))}`);
@@ -104,7 +117,7 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const msg = this.store.messages.get(key)?.find(m => m.id === messageId);
     const local = msg?.localImages?.[imageIndex];
     if (local?.file && this.attachments) {
-      try { await this.attachments.read(local); return local.file; } catch { /* Fall back to server media. */ }
+      try { return await this.attachments.filePath(local); } catch { /* Fall back to server media. */ }
     }
     const segment = msg?.segments.filter(s => s.type === 'image')[imageIndex];
     if (!segment || segment.type !== 'image') throw new Error('图片消息已不在当前记录中');
@@ -142,10 +155,11 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
         md.isTrusted = { enabledCommands: ['qq.retryMessage'] }; return new vscode.Hover(md);
       }
       if (message?.recalled) return new vscode.Hover('这条消息已撤回，保留本地已接收的内容。');
-      if (!message || !/^-?\d+$/.test(message.id) || message.id === '0') return;
-      const md = new vscode.MarkdownString(`[↩ 回复这条消息](${this.replyCommand(doc.uri, message.id).toString()})`);
+      const action = this.rendered.get(key)?.actions.find(a => a.kind === 'reply' && a.line === pos.line && pos.character >= a.start && pos.character < a.end);
+      if (!message || !action) return;
+      const md = new vscode.MarkdownString(`单击 msg 回复这条消息。\n\n[↩ 回复这条消息](${this.replyCommand(doc.uri, message.id).toString()})`);
       md.isTrusted = { enabledCommands: ['qq.reply'] };
-      return new vscode.Hover(md);
+      return new vscode.Hover(md, this.range(action));
     }
     const md = new vscode.MarkdownString();
     md.isTrusted = { enabledCommands: ['qq.openImage', 'qq.insertMessageImage'] };
@@ -153,15 +167,11 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       const file = await this.image(doc.uri, span.messageId, span.imageIndex);
       if (token.isCancellationRequested) return;
       md.supportHtml = true;
-      md.appendMarkdown(imagePreviewMarkup(file, await fs.readFile(file), doc) + '\n\n');
+      md.appendMarkdown((await imagePreviewMarkup(file, doc)) + '\n\n');
     } catch (error: any) { md.appendText(error.message); md.appendMarkdown('\n\n'); }
     const insert = vscode.Uri.parse(`command:qq.insertMessageImage?${encodeURIComponent(JSON.stringify(this.imageArgs(doc.uri, span)))}`);
     md.appendMarkdown(`[打开大图](${this.command(doc.uri, span).toString()}) · [引用到发送栏](${insert.toString()})`);
     return new vscode.Hover(md, this.range(span));
   }
-  imageRanges(uri: vscode.Uri): vscode.Range[] {
-    const key = this.key(uri), rendered = key ? this.rendered.get(key) : undefined;
-    return [...rendered?.images ?? [], ...rendered?.videos ?? []].map(s => this.range(s));
-  }
-  dispose(): void { this.rendered.clear(); this.uris.clear(); }
+  dispose(): void { this.linkCache.clear(); this.rendered.clear(); this.uris.clear(); }
 }

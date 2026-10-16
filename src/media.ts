@@ -6,8 +6,8 @@ import { downloadFile } from './download';
 import { OneBotClient } from './onebot';
 import { imageSize } from 'image-size';
 
-export function previewDimensions(bytes: Buffer, bounds = { width: 240, height: 160 }): { width: number; height: number } {
-  const size = imageSize(bytes);
+export function previewDimensions(bytes: Buffer | { width: number; height: number; orientation?: number }, bounds = { width: 240, height: 160 }): { width: number; height: number } {
+  const size = Buffer.isBuffer(bytes) ? imageSize(bytes) : bytes;
   const rotated = size.orientation !== undefined && size.orientation >= 5 && size.orientation <= 8;
   const width = rotated ? size.height : size.width, height = rotated ? size.width : size.height;
   if (!(width > 0 && height > 0)) throw new Error('无法识别图片尺寸');
@@ -120,38 +120,27 @@ export class MediaCache {
       const file = path.join(this.folder, key + ext);
       try { const s = await fs.stat(file); if (Date.now() - s.mtimeMs < 7 * 86400000) return file; } catch {}
     }
-    let bytes: Buffer | undefined;
-    if (ref.url) { try { bytes = await this.download(ref.url); } catch {} }
-    if (!bytes && ref.file && this.client.connected) {
-      const result = await this.client.call('get_image', { file: ref.file });
-      if (typeof result?.url === 'string') bytes = await this.download(result.url);
-    }
-    if (!bytes) throw new Error('图片暂时无法获取，地址可能已过期；请稍后重试');
-    const ext = imageExtension(bytes);
-    if (!ext) throw new Error('图片格式暂不支持');
-    const file = path.join(this.folder, key + ext);
-    await fs.writeFile(file, bytes);
-    await this.prune().catch(() => {}); return file;
-  }
-  private async download(value: string): Promise<Buffer> {
-    const url = new URL(value);
-    if (!['https:', 'http:'].includes(url.protocol)) throw new Error('图片地址无效');
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!response.ok || !response.body) throw new Error('图片下载失败');
-    const max = 16 * 1024 * 1024;
-    if (Number(response.headers.get('content-length')) > max) { await response.body.cancel(); throw new Error('图片超过 16 MB'); }
-    const reader = response.body.getReader(); const parts: Buffer[] = []; let size = 0;
+    const temporary = path.join(this.folder, key + '.download');
+    const receive = async (url: string) => {
+      await downloadFile(url, temporary, AbortSignal.timeout(30 * 60 * 1000));
+      const handle = await fs.open(temporary, 'r'), header = Buffer.alloc(4096);
+      let count: number;
+      try { count = (await handle.read(header, 0, header.length, 0)).bytesRead; } finally { await handle.close(); }
+      const ext = imageExtension(header.subarray(0, count));
+      if (!ext) throw new Error('响应不是受支持的图片');
+      const file = path.join(this.folder, key + ext); await fs.rename(temporary, file);
+      await this.prune(file).catch(() => {}); return file;
+    };
     try {
-      while (true) {
-        const { done, value: chunk } = await reader.read(); if (done) break;
-        size += chunk.byteLength;
-        if (size > max) throw new Error('图片超过 16 MB');
-        parts.push(Buffer.from(chunk));
+      let failure: unknown;
+      if (ref.url) { try { return await receive(ref.url); } catch (error) { failure = error; } }
+      if (ref.file && this.client.connected) {
+        const result = await this.client.call('get_image', { file: ref.file });
+        if (typeof result?.url === 'string') return await receive(result.url);
       }
-    } finally { await reader.cancel().catch(() => {}); }
-    const bytes = Buffer.concat(parts);
-    if (!imageExtension(bytes)) throw new Error('响应不是受支持的图片');
-    return bytes;
+      if (failure) throw failure;
+      throw new Error('图片暂时无法获取，地址可能已过期；请稍后重试');
+    } finally { await fs.unlink(temporary).catch(() => {}); }
   }
   private async pruneResources(folder: string): Promise<void> {
     for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
@@ -160,13 +149,14 @@ export class MediaCache {
       if (Date.now() - (await fs.stat(file)).mtimeMs >= 7 * 86400000) await fs.unlink(file);
     }
   }
-  private async prune(): Promise<void> {
+  private async prune(keep: string): Promise<void> {
     const files = (await Promise.all((await fs.readdir(this.folder)).map(async name => {
       const file = path.join(this.folder, name); const stat = await fs.stat(file); return { file, size: stat.size, time: stat.mtimeMs, regular: stat.isFile() };
-    }))).filter(file => file.regular);
+    }))).filter(file => file.regular && ['.png', '.jpg', '.gif', '.webp', '.bmp'].includes(path.extname(file.file)));
     let total = files.reduce((n, f) => n + f.size, 0);
     for (const file of files.sort((a,b) => a.time - b.time)) {
       if (total <= 128 * 1024 * 1024 && Date.now() - file.time < 7 * 86400000) break;
+      if (file.file === keep) continue; // A cache budget must never delete the image being opened.
       await fs.unlink(file.file).catch(() => {}); total -= file.size;
     }
   }

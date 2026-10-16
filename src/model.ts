@@ -65,11 +65,10 @@ export interface Draft { text: string; replyId?: string; replyPlaceholder?: stri
 export const emptyDraft = (): Draft => ({ text: '', version: 0, attachments: [] });
 export const attachmentPattern = /\[(?:(?:图片|视频|表情):\d+|文件:[^\]\r\n]+)\]/g;
 export function draftParts(text: string, attachments: Attachment[]): (string | Attachment)[] {
-  const parts: (string | Attachment)[] = []; let offset = 0, count = 0;
+  const parts: (string | Attachment)[] = []; let offset = 0;
   for (const match of text.matchAll(attachmentPattern)) {
     const attachment = attachments.find(a => a.placeholder === match[0]);
     if (!attachment) throw new Error(`占位符 ${match[0]} 没有对应附件，请重新导入或删除它`);
-    if (++count > 8) throw new Error('每条消息最多发送 8 个附件（含重复占位符）');
     if (match.index! > offset) parts.push(text.slice(offset, match.index));
     parts.push(attachment); offset = match.index! + match[0].length;
   }

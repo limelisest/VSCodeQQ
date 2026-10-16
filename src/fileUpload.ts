@@ -12,7 +12,7 @@ export async function uploadToNapCat(client: OneBotClient, source: string,
     const { size } = await handle.stat();
     if (!size) throw new Error('不能发送空文件');
     const extension = path.extname(source).toLowerCase();
-    const suffix = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv'].includes(extension) ? extension : '.attachment';
+    const suffix = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(extension) ? extension : '.attachment';
     const stream_id = randomUUID(), chunkSize = 512 * 1024, total_chunks = Math.ceil(size / chunkSize);
     const buffer = Buffer.allocUnsafe(chunkSize);
     let sent = 0; const started = Date.now();

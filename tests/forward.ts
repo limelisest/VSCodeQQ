@@ -34,7 +34,7 @@ test('转发阅读兼容消息数组和 node 内容，重复或缺失 ID 保持�
   assert.equal(parseForwardMessages({ message: [] }, 'private:1').length, 0);
   assert.throws(() => parseForwardMessages({}, 'private:1'), /有效/);
   assert.throws(() => parseForwardMessages({ messages: [null] }, 'private:1'), /无效/);
-  assert.throws(() => parseForwardMessages({ messages: Array(501).fill({}) }, 'private:1'), /500/);
+  assert.equal(parseForwardMessages({ messages: Array(501).fill({}) }, 'private:1').length, 501);
 });
 test('空 message 数组不遮蔽有效的转发 content，空 messages 不遮蔽 message', () => {
   const node = { type: 'node', data: { user_id: 2, message: [], content: [{ type: 'text', data: { text: '真实正文' } }] } };
@@ -56,7 +56,7 @@ test('单条和合并转发使用目标类型及原始消息引用，拒绝未�
     assert.throws(() => forwardRequest(target, [{ ...messages[0], recalled: true }], true));
     assert.throws(() => forwardRequest(target, [{ ...messages[0], sendState: 'uncertain' }], false));
     assert.throws(() => forwardRequest(target, [], true));
-    assert.throws(() => forwardRequest(target, Array(101).fill(messages[0]), true));
+    assert.equal((forwardRequest(target, Array(101).fill(messages[0]), true).params.messages as unknown[]).length, 101);
   }
 });
 

@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import * as fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { ChatStore } from './store';
 import { Transcript } from './transcript';
 import { AccountSession } from './accountSession';
 import { OneBotClient, OneBotRequestError } from './onebot';
 import { Message, inline, messageText, parseMessage } from './model';
-import { Rendered, renderTranscript } from './transcriptRenderer';
+import { Rendered, renderTranscript, TRANSCRIPT_HELP } from './transcriptRenderer';
 import { configuredCodeLanguage } from './configuration';
 import { imagePreviewMarkup } from './imageHover';
 import { deliverForward } from './forwardDelivery';
@@ -37,7 +36,7 @@ export class ForwardController implements vscode.Disposable {
         try {
           const file = await this.image(doc.uri, span.messageId, span.imageIndex);
           if (token.isCancellationRequested || !this.page(doc.uri)) return;
-          md.supportHtml = true; md.appendMarkdown(imagePreviewMarkup(file, await fs.readFile(file), doc));
+          md.supportHtml = true; md.appendMarkdown((await imagePreviewMarkup(file, doc)));
         } catch (error) { md.appendText(error instanceof Error ? error.message : '图片加载失败'); }
         return new vscode.Hover(md);
       } })];
@@ -67,7 +66,7 @@ export class ForwardController implements vscode.Disposable {
   private pickMessages<T extends vscode.QuickPickItem>(items: T[], multiple: boolean): Promise<readonly T[] | undefined> {
     return new Promise(resolve => {
       const picker = vscode.window.createQuickPick<T>();
-      picker.title = multiple ? '选择合并转发消息（最多 100 条）' : '选择要转发的消息';
+      picker.title = multiple ? '选择合并转发消息' : '选择要转发的消息';
       picker.canSelectMany = multiple;
       picker.matchOnDescription = true;
       picker.items = items;
@@ -93,7 +92,6 @@ export class ForwardController implements vscode.Disposable {
       check(); if (!selected?.length) return;
       const ids = new Set(selected.map(s => s.value.id));
       const messages = candidates.filter(m => ids.has(m.id)); // Preserve transcript order, not click order.
-      if (messages.length > 100) throw new Error('一次最多合并转发 100 条消息');
       const target = await vscode.window.showQuickPick([...store.chats.values()].sort((a, b) => b.lastTime - a.lastTime || a.name.localeCompare(b.name, 'zh-CN')).map(c => ({ label: c.name, description: `${c.type === 'group' ? '群' : '好友'} ${c.id}`, value: c })), { title: '转发到哪个会话', matchOnDescription: true });
       check(); if (!target) return;
       const confirmed = await vscode.window.showQuickPick([{ label: '取消', value: false }, { label: '确认转发', value: true, detail: messages.map(m => `${m.senderName}：${inline(messageText(m)).slice(0, 80)}`).slice(0, 3).join('；') }], { title: `${merged ? '合并转发' : '转发'} ${messages.length} 条 → ${target.value.name} (${target.value.id})` });
@@ -197,7 +195,7 @@ export class ForwardController implements vscode.Disposable {
     check();
     const messages = parseForwardMessages(data, chat.key);
     const rendered = renderTranscript({ ...chat, name: `合并转发 · ${chat.name}` }, messages, store.selfId, configuredCodeLanguage());
-    rendered.text = rendered.text.replace('底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 右键回复 · 图片悬浮预览', '只读合并转发 · 图片悬浮预览 · 链接打开图片或嵌套转发');
+    rendered.text = rendered.text.replace(TRANSCRIPT_HELP, '只读合并转发 · 图片悬浮预览 · 链接打开图片或嵌套转发');
     const uri = vscode.Uri.from({ scheme: 'qq-forward', authority: store.selfId, path: `/${randomUUID()}/合并转发.qqchat` });
     this.pages.set(uri.toString(), { messages, rendered, key: chat.key, account: store.selfId });
     if (this.pages.size > 20) { const oldest = this.pages.keys().next().value!; this.pages.delete(oldest); this.changed.fire(vscode.Uri.parse(oldest)); }

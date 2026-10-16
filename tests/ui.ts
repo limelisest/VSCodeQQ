@@ -67,10 +67,10 @@ export class TestUI {
   private async textPoint(text: string): Promise<{ x: number; y: number }> {
     const point = await this.waitFor(`(() => {
       const root = document.querySelector('.editor-group-container.active .monaco-editor');
-      const line = [...(root?.querySelectorAll('.view-line') ?? [])].find(e => e.textContent.includes(${JSON.stringify(text)}));
+      const line = [...(root?.querySelectorAll('.view-line') ?? [])].find(e => e.textContent.replace(/\u00a0/g, ' ').includes(${JSON.stringify(text)}));
       if (!line) return null;
       const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT), nodes = []; while (walker.nextNode()) nodes.push(walker.currentNode);
-      const full = nodes.map(n => n.textContent).join(''), index = full.indexOf(${JSON.stringify(text)}); let offset = 0;
+      const full = nodes.map(n => n.textContent).join('').replace(/\u00a0/g, ' '), index = full.indexOf(${JSON.stringify(text)}); let offset = 0;
       for (const node of nodes) { if (offset + node.textContent.length > index) { const range = document.createRange(); range.setStart(node, index-offset); range.setEnd(node, index-offset+1); const r = range.getBoundingClientRect(); return r.width ? { x: r.left+r.width/2, y: r.top+r.height/2 } : null; } offset += node.textContent.length; }
     })()`);
     return point;

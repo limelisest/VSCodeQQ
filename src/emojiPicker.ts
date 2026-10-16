@@ -89,9 +89,12 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
       const file = source.file ?? await this.host.transcript.media.get({ file: '', url: source.url });
       if (store !== this.host.store) return;
       if (data.type === 'favoritePreview') {
+        // Local Webview resource URLs can fail even for files under the allowed
+        // storage root. Inline the requested preview so display does not depend
+        // on that resource endpoint. Do not impose a preview file-size cap.
         const bytes = await fs.readFile(file);
         const mime: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp' };
-        const ext = imageExtension(bytes); if (!ext || bytes.length > 16 * 1024 * 1024) throw new Error('表情图片格式或大小不受支持');
+        const ext = imageExtension(bytes); if (!ext) throw new Error('表情图片格式不受支持');
         this.post({ type: 'favoritePreview', account: store.selfId, key, id: data.id, src: `data:${mime[ext]};base64,${bytes.toString('base64')}` });
       }
       else {

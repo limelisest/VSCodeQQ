@@ -1,4 +1,5 @@
 import { draftMentions } from './mentions';
+import * as fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { ChatStore } from './store';
 import { OneBotClient, OneBotRequestError } from './onebot';
@@ -143,18 +144,23 @@ export class OutboxService {
           return true;
         }
         checkCancelled();
-        const videos = new Map<string, unknown>();
-        let lastVideoUpdate = 0;
-        for (const video of used.filter(a => a.kind === 'video')) {
-          const check = () => { checkCancelled(); if (store !== this.host.store || epoch !== this.host.session.generation || !this.host.ready) throw new Error('连接已变化，视频上传已暂停'); };
-          const remote = await uploadToNapCat(this.host.client, await files!.filePath(video), progress => {
+        const uploads = new Map<string, unknown>();
+        let lastMediaUpdate = 0;
+        for (const attachment of used) {
+          if (uploads.has(attachment.id) || !['image', 'video'].includes(attachment.kind)) continue;
+          const source = await files!.filePath(attachment);
+          // Small images retain the compatible inline transport. Larger ones
+          // use the same bounded-memory stream as video; this is not a size cap.
+          if (attachment.kind === 'image' && (await fs.stat(source)).size <= 512 * 1024) continue;
+          const check = () => { checkCancelled(); if (store !== this.host.store || epoch !== this.host.session.generation || !this.host.ready) throw new Error('连接已变化，资源上传已暂停'); };
+          const remote = await uploadToNapCat(this.host.client, source, progress => {
             check(); message.sendProgress = progress;
-            if (Date.now() - lastVideoUpdate > 200 || progress.stage === 'confirm') { lastVideoUpdate = Date.now(); store.enrichMessage(message); }
+            if (Date.now() - lastMediaUpdate > 200 || progress.stage === 'confirm') { lastMediaUpdate = Date.now(); store.enrichMessage(message); }
           }, check);
-          check(); videos.set(video.id, { type: 'video', data: { file: remote } });
+          check(); uploads.set(attachment.id, { type: attachment.kind, data: { file: remote, ...(attachment.sticker ? { sub_type: 1 } : {}) } });
         }
-        const regular = files ? await files.segments(used.filter(a => a.kind !== 'video')) : [];
-        const media = used.map(a => a.kind === 'video' ? videos.get(a.id) : regular.shift());
+        const regular = files ? await files.segments(used.filter(a => !uploads.has(a.id))) : [];
+        const media = used.map(a => uploads.get(a.id) ?? regular.shift());
         if (store !== this.host.store || epoch !== this.host.session.generation || !this.host.ready) throw new Error('连接已变化，消息尚未提交');
         checkCancelled();
         const segments: unknown[] = draft.replyId ? [{ type: 'reply', data: { id: draft.replyId } }] : [];
@@ -167,7 +173,7 @@ export class OutboxService {
         }
         const chat = splitKey(message.chatKey);
         requested = true;
-        const result = await this.host.client.call('send_msg', { message_type: chat.type, [chat.type === 'group' ? 'group_id' : 'user_id']: chat.id, message: segments }, videos.size ? 30 * 60 * 1000 : undefined);
+        const result = await this.host.client.call('send_msg', { message_type: chat.type, [chat.type === 'group' ? 'group_id' : 'user_id']: chat.id, message: segments }, uploads.size ? 30 * 60 * 1000 : undefined);
         const messageId = id(result?.message_id);
         if (!/^-?\d+$/.test(messageId) || /^-?0+$/.test(messageId)) throw new Error('NapCat 未返回有效消息 ID，发送结果未确认，请先检查目标会话');
         message.sendProgress = undefined;

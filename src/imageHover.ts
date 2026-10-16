@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { previewDimensions } from './media';
+import { imageSizeFromFile } from 'image-size/fromFile';
 
-export function imagePreviewMarkup(file: string, bytes: Buffer, doc: vscode.TextDocument): string {
+export async function imagePreviewMarkup(file: string, doc: vscode.TextDocument): Promise<string> {
   // Native hovers have their own maximum height (often 250px). Reserve room for
   // Markdown margins, labels, the open link and the hover toolbar, not just the image.
   let maxHeight = 160;
@@ -14,6 +15,6 @@ export function imagePreviewMarkup(file: string, bytes: Buffer, doc: vscode.Text
     // Logical lines underestimate wrapped lines, which errs toward a smaller preview.
     maxHeight = Math.min(maxHeight, Math.max(24, Math.floor(lines * lineHeight / 2 - 80)));
   }
-  const size = previewDimensions(bytes, { width: 240, height: maxHeight });
+  const size = previewDimensions(await imageSizeFromFile(file), { width: 240, height: maxHeight });
   return `<img src="${vscode.Uri.file(file).toString()}" width="${size.width}" height="${size.height}">`;
 }

@@ -1,3 +1,5 @@
+import './historyEdits';
+import './mediaLimits';
 import './forwardDelivery';
 import './forwardSources';
 import './fileNotices';
@@ -199,7 +201,7 @@ test('占位符按正文顺序展开，删除后不发送；重复可复用，�
   assert.deepEqual(draftParts('前[图片:1]后[图片:1]', [attachment]), ['前', attachment, '后', attachment]);
   assert.deepEqual(draftParts('删掉了图片', [attachment]), ['删掉了图片']);
   assert.throws(() => draftParts('[图片:2]', [attachment]), /没有对应附件/);
-  assert.throws(() => draftParts('[图片:1]'.repeat(9), [attachment]), /最多发送 8/);
+  assert.equal(draftParts('[图片:1]'.repeat(20), [attachment]).length, 20);
   assert.deepEqual(draftParts('[图片]', []), ['[图片]']);
 });
 
@@ -502,7 +504,7 @@ test('真实 @ 按群名片/昵称显示，成员更新刷新引用，普通数�
 });
 
 
-test('正文回复和真实提及各有独立区域，发送成功不显示状态', () => {
+test('msg 回复与 name 提及仅绑定变量，正文可复制，发送成功不显示状态', () => {
   const message = parseMessage({ message_id: 45, sender: { user_id: 456, card: '群名片' }, message: [
     { type: 'text', data: { text: '正文 😀\n下一行' } }, { type: 'at', data: { qq: 789, name: '成员' } },
     { type: 'image', data: { file: 'a' } }, { type: 'file', data: { file_id: 'f', name: '报告.txt' } }
@@ -510,8 +512,12 @@ test('正文回复和真实提及各有独立区域，发送成功不显示状�
   for (const language of codeLanguages) {
     const view = renderTranscript(newChat('group', 1, '群'), [message], '123', language), lines = view.text.split('\n');
     assert.equal(view.mentions.length, 2, language);
-    assert.equal(view.mentions.find(s => s.qq === '456') && lines[view.mentions[0].line].slice(view.mentions[0].start, view.mentions[0].end), '群名片');
-    assert.ok(view.actions.some(a => lines[a.line].slice(a.start, a.end).includes('正文')), language);
+    const sender = view.mentions.find(s => s.kind === 'sender')!;
+    assert.equal(sender.qq, '456'); assert.equal(sender.name, '群名片');
+    assert.equal(lines[sender.line].slice(sender.start, sender.end), 'name', language);
+    const replies = view.actions.filter(a => a.kind === 'reply');
+    assert.equal(replies.length, 1, language);
+    assert.equal(lines[replies[0].line].slice(replies[0].start, replies[0].end), 'msg', language);
     const overlaps = (a: { line: number; start: number; end: number }, b: typeof a) => a.line === b.line && a.start < b.end && b.start < a.end;
     for (const action of view.actions) for (const special of [...view.mentions, ...view.images, ...view.files]) assert.equal(overlaps(action, special), false, language);
     assert.ok(!view.text.includes('[回复]'), language);

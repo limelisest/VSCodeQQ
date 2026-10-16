@@ -10,9 +10,12 @@ import { testForwardCommands } from './forwardExtension';
 import { testFileNotices } from './fileNoticeExtension';
 import { testOperationLocks } from './operationExtension';
 import { testResources } from './resourceExtension';
+import { testDraftRestore } from './draftRestoreExtension';
+import { testLinkUpdates } from './linkUpdatesExtension';
 import { testListSearch, testListActive } from './listSearchExtension';
 import { testSlashCommands } from './slashExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
+import { testEmojiPreviews } from './emojiPreviewExtension';
 import { testReplyPlaceholder } from './replyExtension';
 import { newChat } from '../src/model';
 import { allowsUnread } from '../src/notifications';
@@ -62,12 +65,15 @@ export async function run(): Promise<void> {
       ui = await TestUI.connect();
       await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testDraftRestore(app, backend, checks);
+      await testLinkUpdates(app, backend, ui, checks);
       await testListSearch(app, ui, checks);
       await testListActive(app, ui, checks);
       await testFileNotices(app, backend, checks);
       await testOperationLocks(app, backend, ui, checks);
       await testResources(app, backend, ui, checks);
       await testForwardCommands(app, backend, ui, checks);
+      await testEmojiPreviews(app, backend, ui, checks);
       console.log(`QQ forward integration: ${checks.length} checks passed`);
       return;
     }
@@ -270,7 +276,7 @@ export async function run(): Promise<void> {
       assert.equal(doc.languageId, 'qq-chat');
       const styleLinks = await vscode.commands.executeCommand<vscode.DocumentLink[]>('vscode.executeLinkProvider', doc.uri);
       assert.equal(styleLinks.filter(l => l.target?.path === 'qq.openImage').length, 1);
-      for (const link of styleLinks.filter(l => l.target?.path === 'qq.reply')) assert.ok(doc.getText(link.range).length && !doc.getText(link.range).includes('// [回复]'));
+      assert.equal(styleLinks.filter(l => l.target?.path === 'qq.reply').length, 0);
     }
     await vscode.workspace.getConfiguration('qq').update('codeLanguage', 'dart', vscode.ConfigurationTarget.Global);
     await until(() => doc.getText().includes('String msg ='));
@@ -281,13 +287,14 @@ export async function run(): Promise<void> {
     checks.push('八种语言热切换、VS Code 设置生效、草稿/引用保留和图片/回复位置');
     const links = await vscode.commands.executeCommand<vscode.DocumentLink[]>('vscode.executeLinkProvider', doc.uri);
     assert.equal(links.filter(l => l.target?.path === 'qq.openImage').length, 1);
-    const replyLink = links.find(l => l.target?.path === 'qq.reply')!;
-    assert.ok(replyLink);
-    await vscode.commands.executeCommand('qq.reply', ...JSON.parse(decodeURIComponent(replyLink.target!.query)));
+    const replyField = app.transcript!.rendered.get('group:20001')!.actions.find(a => a.kind === 'reply' && a.messageId === '1000')!;
+    const replyCommand = app.transcript!.clickCommand(doc, new vscode.Position(replyField.line, replyField.start))!;
+    assert.ok(replyCommand);
+    await vscode.commands.executeCommand(replyCommand.path, ...JSON.parse(decodeURIComponent(replyCommand.query)));
     assert.equal(app.store!.draft('group:20001').replyId, '1000');
     assert.ok(app.native.draft(doc).includes('[回复:群名片]'));
     await vscode.commands.executeCommand('qq.cancelReply');
-    checks.push('消息头回复链接、指定消息引用、草稿显示回复摘要与取消');
+    checks.push('msg 变量回复、指定消息引用、草稿显示回复摘要与取消');
     await until(() => app!.native.historyMatches(doc));
     const hover = await vscode.commands.executeCommand<vscode.Hover[]>('vscode.executeHoverProvider', doc.uri, links.find(l => l.target?.path === 'qq.openImage')!.range.start);
     assert.ok(hover.some(h => h.contents.some(c => typeof c !== 'string' && 'value' in c && c.value.includes('<img'))));
@@ -907,13 +914,16 @@ export async function run(): Promise<void> {
     app.store!.setDraft('group:20002', '点击操作保留草稿');
     backend.emit({ ...backend.message(77990), group_id: 20002, message: [{ type: 'text', data: { text: 'click-body-probe ' } }, { type: 'at', data: { qq: '10001' } }] });
     await until(() => editor.document.getText().includes('click-body-probe') && !app!.native.isUpdating(editor.document));
-    const bodyLine = app.transcript!.rendered.get('group:20002')!.actions.find(a => a.messageId === '77990' && editor.document.lineAt(a.line).text.slice(a.start, a.end).includes('click-body-probe'))!.line;
+    const bodyLine = app.transcript!.rendered.get('group:20002')!.actions.find(a => a.messageId === '77990' && a.kind === 'reply')!.line;
     editor.revealRange(new vscode.Range(bodyLine, 0, bodyLine, 0), vscode.TextEditorRevealType.InCenter);
     await new Promise(r => setTimeout(r, 300)); await ui.dragText('click-body-probe');
     await new Promise(r => setTimeout(r, 350));
     assert.ok(!editor.selection.isEmpty, '拖选正文应保留文本选区');
     assert.equal(app.store!.draft('group:20002').replyId, undefined, '拖选复制不触发回复');
     await ui.clickText('click-body-probe');
+    await new Promise(r => setTimeout(r, 350));
+    assert.equal(app.store!.draft('group:20002').replyId, undefined, '正文单击不触发回复');
+    await ui.clickText('msg[] = "click-body-probe');
     await until(() => app!.store!.draft('group:20002').replyId === '77990' && app!.native.draft(editor.document) === app!.store!.draft('group:20002').replyPlaceholder + '点击操作保留草稿' && !app!.native.isUpdating(editor.document));
     assert.equal(app.native.draft(editor.document), app.store!.draft('group:20002').replyPlaceholder + '点击操作保留草稿');
     editor.revealRange(new vscode.Range(bodyLine, 0, bodyLine, 0), vscode.TextEditorRevealType.InCenter);
@@ -921,13 +931,13 @@ export async function run(): Promise<void> {
     await until(() => app!.native.draft(editor.document) === app!.store!.draft('group:20002').replyPlaceholder + '点击操作保留草稿[@:群名片] ');
     const nameSpan = app.transcript!.rendered.get('group:20002')!.mentions.find(m => m.qq === '10001' && editor.document.lineAt(m.line).text.includes('char name[]'))!;
     editor.revealRange(new vscode.Range(nameSpan.line, 0, nameSpan.line, 0), vscode.TextEditorRevealType.InCenter);
-    await new Promise(r => setTimeout(r, 350)); await ui.clickText('群名片');
+    await new Promise(r => setTimeout(r, 350)); await ui.clickText('name[]');
     await until(() => app!.native.draft(editor.document) === app!.store!.draft('group:20002').replyPlaceholder + '点击操作保留草稿[@:群名片] [@:群名片] ');
     assert.equal(app.store!.draft('group:20002').replyId, '77990');
     assert.equal(backend.sent.length, beforeAt + 1, '鼠标点击只编辑草稿，不自动发送');
     app.store!.setDraft('group:20002', '', undefined, []); await app.native.sync(editor, true);
     assert.ok(!editor.document.getText().includes('已发送') && !editor.document.getText().includes('// [回复]'));
-    checks.push('真实单击正文回复、单击 @ 与发送者群名片加入具名提及，草稿和回复保留，成功无状态文字');
+    checks.push('真实单击 msg 回复、单击 @ 与 name 变量加入具名提及，草稿和回复保留，成功无状态文字');
 
 
 

@@ -1,8 +1,10 @@
 import { Chat, Message, inline } from './model';
 import { CodeLanguage, codeStyle } from './codeStyle';
 
+export const TRANSCRIPT_HELP = '底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 点击 msg 回复 · 点击 name 提及 · 图片悬浮预览';
+
 export interface Span { line: number; start: number; end: number; messageId: string; imageIndex: number; }
-export interface MentionSpan { line: number; start: number; end: number; qq: string; name: string; }
+export interface MentionSpan { kind: 'sender' | 'mention'; line: number; start: number; end: number; qq: string; name: string; }
 export interface Rendered { text: string; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; videos: { line: number; start: number; end: number; messageId: string; videoIndex: number }[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
 // Escape only the display projection; copy/reply/send continue using the original message.
 export const codeString = (text: string): string => JSON.stringify(text).slice(1, -1)
@@ -11,7 +13,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
   const style = codeStyle(language);
   const escape = (text: string) => style.escape(codeString(text));
   const quote = (text: string) => `"${escape(text)}"`;
-  const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} 底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 右键回复 · 图片悬浮预览`, ''];
+  const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} ${TRANSCRIPT_HELP}`, ''];
   const rendered: Rendered = { text: '', forwards: [], images: [], videos: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
   const byId = new Map(messages.map(m => [m.id, m]));
   let lastDay = '';
@@ -45,7 +47,10 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     lines.push(`${style.function(`${fn}_${/^\d+$/.test(m.senderId) ? m.senderId : 'unknown'}`)}${tags.length ? `  ${style.comment} ${tags.join(' · ')}` : ''}`);
     if (m.senderTitle) lines.push(style.string('title') + escape(m.senderTitle) + style.stringEnd);
     const remark = m.senderRemark && m.senderRemark !== m.senderName ? `  ${style.comment} 备注：${inline(m.senderRemark)}` : '';
-    if (chat.type === 'group' && !self && /^\d+$/.test(m.senderId)) rendered.mentions.push({ line: lines.length, start: style.string('name').length, end: style.string('name').length + escape(m.senderName).length, qq: m.senderId, name: m.senderName });
+    if (chat.type === 'group' && !self && /^\d+$/.test(m.senderId)) {
+      const start = style.string('name').indexOf('name');
+      rendered.mentions.push({ kind: 'sender', line: lines.length, start, end: start + 4, qq: m.senderId, name: m.senderName });
+    }
     lines.push(style.string('name') + escape(m.senderName) + style.stringEnd + remark);
     if (m.replyId) {
       let replay = style.string('replay');
@@ -65,7 +70,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
             replay += label;
           } else if (part.type === 'mention' && chat.type === 'group') {
             const text = escape(part.text);
-            rendered.mentions.push({ line: lines.length, start: replay.length, end: replay.length + text.length, qq: part.qq, name: part.name || part.qq });
+            rendered.mentions.push({ kind: 'mention', line: lines.length, start: replay.length, end: replay.length + text.length, qq: part.qq, name: part.name || part.qq });
             replay += text;
           } else {
             replay += escape(part.text.slice(0, remaining));
@@ -81,7 +86,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     const replySpan = (start: number, end: number) => {
       if (canReply && end > start) rendered.actions.push({ line: lines.length, start, end, messageId: m.id, kind: 'reply' });
     };
-    // The field itself remains an accessible reply target for empty/image-only messages.
+    // Keep the reply target on the variable, leaving message text free to select and copy.
     const msgStart = current.indexOf('msg'); replySpan(msgStart, msgStart + 3);
     let imageIndex = 0, videoIndex = 0, fileIndex = 0, forwardIndex = 0;
     const resources: { type: 'video' | 'file'; index: number; name: string; alias?: { line: number; start: number; end: number; messageId: string } }[] = [];
@@ -99,7 +104,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
         current += part.text;
       } else if (part.type === 'mention' && chat.type === 'group') {
         const text = escape(part.text);
-        rendered.mentions.push({ line: lines.length, start: current.length, end: current.length + text.length, qq: part.qq, name: part.name || part.qq });
+        rendered.mentions.push({ kind: 'mention', line: lines.length, start: current.length, end: current.length + text.length, qq: part.qq, name: part.name || part.qq });
         current += text;
       } else if (part.type === 'file') {
         const index = fileIndex++, label = `[文件:${index + 1}]`;
@@ -110,7 +115,6 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
         for (let index = 0; index < parts.length; index++) {
           if (index) { lines.push(current + '\\n"' + style.join); current = style.continuation; }
           const text = escape(parts[index]);
-          replySpan(current.length, current.length + text.length);
           current += text;
         }
       }

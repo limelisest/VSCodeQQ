@@ -72,10 +72,8 @@ export class DraftService {
     const draft = this.draft(key);
     this.setDraft(key, draft.text + prepared.map(a => a.placeholder).join(''), draft.replyId);
   }
-  prepareAttachments(key: string, attachments: Attachment[], baseText?: string): Attachment[] {
+  prepareAttachments(key: string, attachments: Attachment[]): Attachment[] {
     const draft = this.draft(key);
-    const used = (baseText ?? draft.text).match(attachmentPattern)?.length ?? 0;
-    if (used + attachments.length > 8) throw new Error('每条消息最多附带 8 个附件');
     const tokens = new Set(draft.attachments.map(a => a.placeholder));
     const prepared = attachments.map(a => {
       let placeholder: string;

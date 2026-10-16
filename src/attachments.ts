@@ -16,7 +16,6 @@ export const basicFaces = [
 export class AttachmentFiles {
   constructor(readonly folder: string) {}
   async stage(bytes: Buffer, label: string, sticker = false): Promise<Attachment> {
-    if (bytes.length > 16 * 1024 * 1024) throw new Error('单张图片不能超过 16 MB');
     const ext = imageExtension(bytes); if (!ext) throw new Error('请选择 PNG、JPEG、GIF、WebP 或 BMP 图片');
     await fs.mkdir(this.folder, { recursive: true });
     const id = randomUUID(), file = path.join(this.folder, id + ext);
@@ -50,8 +49,10 @@ export class AttachmentFiles {
     const video = videoExtension(header.subarray(0, length));
     if (video) return this.videoFile(await this.stageFilePath(source, name), video);
     if (!imageExtension(header.subarray(0, length))) return this.stageFilePath(source, name);
-    if (stat.size > 16 * 1024 * 1024) throw new Error('单张图片不能超过 16 MB');
-    return this.stage(await fs.readFile(source), name);
+    const ext = imageExtension(header.subarray(0, length))!;
+    const attachment = await this.stageFilePath(source, name);
+    const file = path.join(this.folder, attachment.id + ext);
+    await fs.rename(attachment.file!, file); return { ...attachment, kind: 'image', file };
   }
   async stageFilePath(source: string, name: string): Promise<Attachment> {
     const stat = await fs.stat(source);
@@ -68,12 +69,7 @@ export class AttachmentFiles {
     if (!(await fs.stat(attachment.file)).isFile()) throw new Error('附件缓存已失效');
     return attachment.file;
   }
-  async read(attachment: Attachment): Promise<Buffer> {
-    if (!attachment.file || path.dirname(path.resolve(attachment.file)) !== path.resolve(this.folder)) throw new Error('附件路径无效');
-    const stat = await fs.stat(attachment.file);
-    if (stat.size > 16 * 1024 * 1024) throw new Error('附件过大');
-    return fs.readFile(attachment.file);
-  }
+  async read(attachment: Attachment): Promise<Buffer> { return fs.readFile(await this.filePath(attachment)); }
   async cacheInfo(): Promise<{ bytes: number; count: number }> {
     const entries = await this.entries();
     return { bytes: entries.reduce((n, f) => n + f.size, 0), count: entries.length };
@@ -101,16 +97,14 @@ export class AttachmentFiles {
     }
   }
   async segments(attachments: Attachment[]): Promise<unknown[]> {
-    if (attachments.length > 8) throw new Error('附件数量超过上限');
-    const segments: unknown[] = []; let size = 0;
+    const segments: unknown[] = [];
     for (const attachment of attachments) {
       if (attachment.kind === 'face') {
         if (!basicFaces.some(face => face.id === attachment.faceId)) throw new Error('无效的 QQ 表情');
         segments.push({ type: 'face', data: { id: attachment.faceId } });
       } else {
         if (attachment.kind === 'file' || attachment.kind === 'video') throw new Error('文件和视频必须先上传到 NapCat');
-        const bytes = await this.read(attachment); size += bytes.length;
-        if (size > 16 * 1024 * 1024) throw new Error('单条消息的图片总大小不能超过 16 MB');
+        const bytes = await this.read(attachment);
         segments.push({ type: 'image', data: { file: `base64://${bytes.toString('base64')}`, ...(attachment.sticker ? { sub_type: 1 } : {}) } });
       }
     }

@@ -11,7 +11,6 @@ export function forwardNodes(data: unknown): unknown[] | undefined {
 export function parseForwardMessages(data: unknown, key: string): Message[] {
   const nodes = forwardNodes(data);
   if (!Array.isArray(nodes)) throw new Error('NapCat 未返回有效的合并转发内容');
-  if (nodes.length > 500) throw new Error('合并转发超过 500 条，请在 QQ 中查看');
   const parsed = nodes.map(value => {
     if (!value || typeof value !== 'object') throw new Error('合并转发包含无效消息');
     const raw = value as Record<string, any>;
@@ -32,7 +31,7 @@ export function parseForwardMessages(data: unknown, key: string): Message[] {
   return parsed.map((m, i) => ({ ...m, id: `${prefix}${i}`, replyId: m.replyId ? unique.get(m.replyId) ?? m.replyId : undefined }));
 }
 export function forwardRequest(target: Chat, messages: Message[], merged: boolean): { action: string; params: Record<string, unknown> } {
-  if (!messages.length || !merged && messages.length !== 1 || messages.length > 100 || messages.some(m => !/^-?\d+$/.test(m.id) || m.id === '0' || m.recalled || m.sendState && m.sendState !== 'sent')) throw new Error('请选择 1～100 条已发送且未撤回的消息');
+  if (!messages.length || !merged && messages.length !== 1 || messages.some(m => !/^-?\d+$/.test(m.id) || m.id === '0' || m.recalled || m.sendState && m.sendState !== 'sent')) throw new Error('请选择已发送且未撤回的消息（单条转发只选一条）');
   const params = { [target.type === 'group' ? 'group_id' : 'user_id']: target.id };
   return merged ? {
     action: target.type === 'group' ? 'send_group_forward_msg' : 'send_private_forward_msg',

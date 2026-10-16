@@ -10,6 +10,7 @@ import { imagePreviewMarkup } from './imageHover';
 import { ResourceClipboard, RESOURCE_MIME, ResourceSpan } from './resourceClipboard';
 import { transferFiles } from './transferFiles';
 import { mentionPattern } from './mentions';
+import { historyEdits } from './historyEdits';
 
 export const DRAFT_DIVIDER = '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───';
 interface Host {
@@ -30,7 +31,7 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
   private timer?: NodeJS.Timeout;
   private saveTimers = new Map<string, NodeJS.Timeout>();
   private updating = new Map<string, Promise<void>>();
-  private expectedEdits = new Map<string, string>();
+  private expectedEdits = new Map<string, { text: string; prefix: string; publish: () => void }>();
   private importing = new Map<string, { placeholders?: string[] }>();
   private importTimers = new Set<NodeJS.Timeout>();
   private repairs = new Set<string>();
@@ -84,14 +85,23 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     if (importing?.placeholders?.length && importing.placeholders.every(p => this.region(doc)?.text.includes(p))) {
       this.importing.delete(uri); this.schedule(key, true);
     }
-    const internal = this.expectedEdits.get(uri) === text;
+    const expected = this.expectedEdits.get(uri), internal = expected?.text === text;
+    // A user may type while a history edit is in flight. The draft can then
+    // differ from the expected snapshot while its new history is already valid.
+    if (expected && text.startsWith(expected.prefix)) expected.publish();
     if (internal) this.expectedEdits.delete(uri);
-    if (!internal && changes.length && !this.historyMatches(doc)) {
+    const replacesPage = !internal && !!this.region(doc) && changes.some(change => change.rangeOffset === 0 && change.text.includes(`\n${DRAFT_DIVIDER}\n`));
+    if (!internal && changes.length && (!this.historyMatches(doc) || replacesPage)) {
       const old = Buffer.from(this.buffers.get(uri) ?? []).toString('utf8');
       const divider = `\n${DRAFT_DIVIDER}\n`, boundary = old.indexOf(divider);
       const start = boundary < 0 ? -1 : boundary + divider.length;
-      let draft = start >= 0 ? old.slice(start) : store.draft(key).text;
-      if (start >= 0) for (const change of [...changes].sort((a, b) => b.rangeOffset - a.rangeOffset)) {
+      // VS Code may reapply an older complete page from its hot-exit backup.
+      // That page is a projection, not a draft edit: folding its replacement
+      // text across the divider would copy history (including failed sends)
+      // into the current draft. Persisted draft state owns page restoration.
+      const pageSnapshot = replacesPage || !!this.region(doc) && changes.some(change => change.rangeOffset < start && change.text.includes(divider));
+      let draft = pageSnapshot ? store.draft(key).text : start >= 0 ? old.slice(start) : store.draft(key).text;
+      if (!pageSnapshot && start >= 0) for (const change of [...changes].sort((a, b) => b.rangeOffset - a.rangeOffset)) {
         const end = change.rangeOffset + change.rangeLength;
         if (end < start || (end === start && change.rangeOffset < start)) continue;
         const from = Math.max(0, change.rangeOffset - start), to = Math.max(0, end - start);
@@ -148,26 +158,33 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
       let committed = false, appliedChange = false;
       if (changesHistory) this.host.beforeHistoryChange(doc.uri);
       try {
-        const prefix = history || restore ? this.prefix(doc.uri, key) : doc.getText().slice(0, region!.start);
+        const projection = changesHistory ? transcript.project(doc.uri) : undefined;
+        const prefix = projection ? `${projection.text}\n\n${DRAFT_DIVIDER}\n` : doc.getText().slice(0, region!.start);
+        const publish = () => {
+          if (this.host.store !== store || this.host.transcript !== transcript || doc.isClosed) return;
+          this.prefixes.set(uri, prefix);
+          if (projection?.rendered) transcript.rendered.set(key, projection.rendered);
+        };
         const draft = store.draft(key).text;
-        if (doc.getText() === prefix + draft) { committed = true; this.repairs.delete(uri); return; }
-        this.expectedEdits.set(uri, prefix + draft);
+        if (doc.getText() === prefix + draft) { publish(); committed = true; this.repairs.delete(uri); return; }
+        // Keep the old projection usable until VS Code actually applies the edit.
+        const expected = { text: prefix + draft, prefix, publish };
+        this.expectedEdits.set(uri, expected);
         const applied = await editor.edit(edit => {
           if (restore) edit.replace(new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), prefix + draft);
           else {
             if (region!.text !== draft) edit.replace(new vscode.Range(doc.positionAt(region!.start), doc.positionAt(doc.getText().length)), draft);
             const oldPrefix = doc.getText().slice(0, region!.start);
             if (oldPrefix !== prefix) {
-              // Keep unchanged history in the editor model so its scroll anchor survives.
-              let start = 0, oldEnd = oldPrefix.length, newEnd = prefix.length;
-              while (start < oldEnd && start < newEnd && oldPrefix[start] === prefix[start]) start++;
-              while (oldEnd > start && newEnd > start && oldPrefix[oldEnd - 1] === prefix[newEnd - 1]) { oldEnd--; newEnd--; }
-              edit.replace(new vscode.Range(doc.positionAt(start), doc.positionAt(oldEnd)), prefix.slice(start, newEnd));
+              for (const change of historyEdits(oldPrefix, prefix, previousRendered, projection?.rendered)) {
+                edit.replace(new vscode.Range(doc.positionAt(change.start), doc.positionAt(change.end)), change.text);
+              }
             }
           }
         }, { undoStopBefore: false, undoStopAfter: false });
+        if (this.expectedEdits.get(uri) === expected) this.expectedEdits.delete(uri);
         committed = applied; appliedChange = applied;
-        if (applied) this.repairs.delete(uri);
+        if (applied) { publish(); this.repairs.delete(uri); }
         else this.expectedEdits.delete(uri);
         if (!applied) this.schedule(key, history);
       } finally {
@@ -237,9 +254,9 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
         md.appendText(target ? `${inline(target.senderName)}：${messageText(target).slice(0, 500)}` : `回复消息 ${draft.replyId}`);
         for (let index = 0; index < Math.min(2, target?.segments.filter(s => s.type === 'image').length ?? 0); index++) {
           try {
-            const file = await this.host.transcript!.image(doc.uri, draft.replyId, index), bytes = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(file)));
+            const file = await this.host.transcript!.image(doc.uri, draft.replyId, index);
             if (this.host.transcript?.key(doc.uri) !== key) return;
-            md.appendMarkdown('\n\n' + imagePreviewMarkup(file, bytes, doc));
+            md.appendMarkdown('\n\n' + (await imagePreviewMarkup(file, doc)));
           } catch { md.appendText('\n[图片预览暂不可用]'); }
         }
         md.appendText('\n\n删除占位符即可取消回复。');
@@ -249,9 +266,9 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     const item = this.attachmentAt(doc, pos); if (!item) return;
     const md = new vscode.MarkdownString(); md.appendText(item.attachment.label);
     if (item.attachment.kind === 'image' && this.host.attachments && item.attachment.file) {
-      const bytes = await this.host.attachments.read(item.attachment);
+      const file = await this.host.attachments.filePath(item.attachment);
       md.supportHtml = true;
-      md.appendMarkdown(`\n\n${imagePreviewMarkup(item.attachment.file, bytes, doc)}`);
+      md.appendMarkdown(`\n\n${await imagePreviewMarkup(file, doc)}`);
     }
     if (item.attachment.kind === 'file') md.appendText(`\n大小：${(item.attachment.size ?? 0).toLocaleString()} 字节\nEnter 发送；删除占位符可取消附件`);
     return new vscode.Hover(md, item.range);
@@ -377,10 +394,7 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
         staged.push(attachment); attachments.set(span.identity, attachment);
       }
       check();
-      const base = region.text.slice(0, doc.offsetAt(range.start) - region.start) + region.text.slice(doc.offsetAt(range.end) - region.start);
-      const occurrenceCount = copy.spans.filter(s => s.resource.kind !== 'mention').length;
-      if ((base.match(attachmentPattern)?.length ?? 0) + occurrenceCount > 8) throw new Error('每条消息最多附带 8 个附件');
-      const prepared = staged.length ? store.prepareAttachments(key, staged, base) : [];
+      const prepared = staged.length ? store.prepareAttachments(key, staged) : [];
       const identities = [...attachments.keys()];
       for (let i = 0; i < prepared.length; i++) replacements.set(identities[i], prepared[i].placeholder!);
       for (const span of copy.spans) if (span.resource.kind === 'mention' && !replacements.has(span.identity)) {
@@ -403,8 +417,7 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
       attachments = await transferFiles(data, files, this.host.transcript?.media, check);
       if (!attachments.length) return;
       check();
-      const base = region.text.slice(0, doc.offsetAt(range.start) - region.start) + region.text.slice(doc.offsetAt(range.end) - region.start);
-      const prepared = store.prepareAttachments(key, attachments, base);
+      const prepared = store.prepareAttachments(key, attachments);
       operation.placeholders = prepared.map(a => a.placeholder!);
       return { text: prepared.map(a => a.placeholder).join(''), image: prepared.every(a => a.kind === 'image') };
     } catch (error) { await files.discard(attachments); if (token.isCancellationRequested) return; throw error; }

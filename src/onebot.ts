@@ -28,7 +28,7 @@ export class OneBotClient extends EventEmitter {
   private open(): Promise<void> {
     return new Promise((resolve, reject) => {
       let opened = false;
-      const ws = new WebSocket(this.url, { headers: this.token ? { Authorization: `Bearer ${this.token}` } : {}, handshakeTimeout: 10000, maxPayload: 16 * 1024 * 1024 });
+      const ws = new WebSocket(this.url, { headers: this.token ? { Authorization: `Bearer ${this.token}` } : {}, handshakeTimeout: 10000, maxPayload: 0 });
       this.socket = ws;
       ws.on('open', () => {
         if (this.socket !== ws) { ws.terminate(); return; }

@@ -46,7 +46,6 @@ export async function transferFiles(data: vscode.DataTransfer, files: Attachment
     const url = match && (match[1] || match[2] || match[3]).replace(/&amp;/g, '&');
     if (url && /^https?:\/\//i.test(url)) add(vscode.Uri.parse(url));
   }
-  if (resources.size + external.size > 8) throw new Error('每条消息最多附带 8 个附件');
   const staged: Attachment[] = [];
   try {
     for (const uri of resources.values()) {
