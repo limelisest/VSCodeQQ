@@ -2,6 +2,7 @@ import { restoreReply } from './replies';
 import { isNapCatEventTimeout } from './requestFailure';
 import { mentionText, restoredMentions } from './mentions';
 import { DraftService } from './draftService';
+import { chatDisplayName } from './systemChats';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -28,7 +29,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     try {
       const data = JSON.parse(await fs.readFile(path.join(this.folder, 'state.json'), 'utf8'));
       this.draftService.attachmentSerial = Number(data.attachmentSerial) || 0;
-      for (const chat of data.chats ?? []) { try { splitKey(chat.key); this.chats.set(chat.key, { ...chat, notification: 'unknown' }); } catch {} }
+      for (const chat of data.chats ?? []) { try { const { type, id } = splitKey(chat.key); this.chats.set(chat.key, { ...chat, name: chatDisplayName(type, id, inline(chat.name)), notification: 'unknown' }); } catch {} }
       for (const message of data.outbox ?? []) {
         if (!this.chats.has(message.chatKey) || !isPending(message)) continue;
         if (['sending', 'queued'].includes(message.sendState)) { message.sendState = 'uncertain'; message.sendError = '上次关闭时结果未确认，请检查聊天记录后重试'; }
@@ -89,15 +90,34 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     return refs;
   }
   upsert(chat: Chat): void {
+    chat.name = chatDisplayName(chat.type, chat.id, inline(chat.name));
     const current = this.chats.get(chat.key);
     this.chats.set(chat.key, current ? { ...current, name: chat.name, remark: chat.remark ?? current.remark, nickname: chat.nickname ?? current.nickname } : chat);
     this.changed(chat.key, 'chat');
   }
   history(key: string, messages: Message[]): void {
+    // Older versions discarded card data. Recover those placeholders when the
+    // backend returns the original card, while retaining local delivery/recall state.
+    const byId = new Map(messages.map(message => [message.id, message]));
+    let refreshedCards = false;
+    for (const cached of this.messages.get(key) ?? []) {
+      const fresh = byId.get(cached.id);
+      if (!fresh || cached.recalled) continue;
+      cached.segments = cached.segments.map((segment, index) => {
+        const replacement = fresh.segments[index];
+        if (segment.type === 'text' && ['[卡片]', '[消息]'].includes(segment.text)
+          && replacement?.type === 'text' && replacement.card && replacement.text !== '[卡片]') {
+          refreshedCards = true; return replacement;
+        }
+        return segment;
+      });
+    }
     const combined = [...messages, ...this.messages.get(key) ?? []];
     const own = new Set(combined.filter(m => m.senderId === this.selfId).map(m => m.id));
     for (const m of combined) if (m.replyId && own.has(m.replyId)) m.replyToSelf = true;
     this.messages.set(key, mergeMessages(messages, this.messages.get(key) ?? [], this.limit));
+    const latest = this.messages.get(key)?.at(-1);
+    if (refreshedCards && latest) this.updatePreview(latest);
     this.trackOutbox(key); this.dirty.add(key); this.changed(key);
   }
   setMembers(key: string, data: any[]): void {

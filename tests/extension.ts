@@ -8,6 +8,7 @@ import { DRAFT_DIVIDER } from '../src/nativeEditor';
 import { TestUI } from './ui';
 import { testForwardCommands } from './forwardExtension';
 import { testFileNotices } from './fileNoticeExtension';
+import { testSystemChat } from './systemChatExtension';
 import { testOperationLocks } from './operationExtension';
 import { testResources } from './resourceExtension';
 import { testDraftRestore } from './draftRestoreExtension';
@@ -62,6 +63,13 @@ export async function run(): Promise<void> {
     await until(() => settingsReady);
     checks.push('连接设置页面入口、输入校验、Token 保留/清除/不回传、独立测试连接');
     await app.settings.handle({ action: 'connect', ...form, token: '', clearToken: true }); assert.equal(app.ready, true); checks.push('设置页保存并连接、NapCat 握手与会话列表');
+    if (process.env.QQ_TEST_SYSTEM_ONLY === '1') {
+      ui = await TestUI.connect();
+      await ui.call('Page.bringToFront');
+      await testSystemChat(app, backend, ui, checks);
+      console.log(`QQ system message integration: ${checks.length} checks passed`);
+      return;
+    }
     if (process.env.QQ_TEST_FORWARD_ONLY === '1') {
       ui = await TestUI.connect();
       await ui.call('Page.bringToFront');
@@ -71,6 +79,7 @@ export async function run(): Promise<void> {
       await testListSearch(app, ui, checks);
       await testListActive(app, ui, checks);
       await testFileNotices(app, backend, checks);
+      await testSystemChat(app, backend, ui, checks);
       await testOperationLocks(app, backend, ui, checks);
       await testResources(app, backend, ui, checks);
       await testForwardCommands(app, backend, ui, checks);
@@ -1066,6 +1075,7 @@ export async function run(): Promise<void> {
     await testReplyPlaceholder(app, backend, checks);
     await testEmojiShortcuts(app, backend, ui, checks);
     await testFileNotices(app, backend, checks);
+    await testSystemChat(app, backend, ui, checks);
     await testOperationLocks(app, backend, ui, checks);
     await testResources(app, backend, ui, checks);
     await testForwardCommands(app, backend, ui, checks);

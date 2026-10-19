@@ -23,8 +23,7 @@ export class SettingsTree implements vscode.TreeDataProvider<vscode.TreeItem>, v
       row('connect', connected ? '重新连接' : '连接 OneBot', 'debug-restart', 'qq.connect'),
       ...(connected ? [row('disconnect', '断开连接', 'debug-disconnect', 'qq.disconnect')] : []),
       row('language', '代码风格', 'code', 'qq.chooseCodeLanguage', languageLabels[language]),
-      row('autoConnect', '自动连接', 'sync', 'qq.toggleAutoConnect', vscode.workspace.getConfiguration('qq').get('autoConnect', true) ? '开启' : '关闭'),
-      row('settings', '详细设置面板', 'settings-gear', 'qq.configure')
+      row('autoConnect', '自动连接', 'sync', 'qq.toggleAutoConnect', vscode.workspace.getConfiguration('qq').get('autoConnect', true) ? '开启' : '关闭')
     ];
   }
   dispose(): void { this.emitter.dispose(); }

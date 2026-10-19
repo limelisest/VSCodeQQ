@@ -15,6 +15,7 @@ import { EmojiPicker } from './emojiPicker';
 import { EmojiCompletion } from './emojiCompletion';
 import { ForwardController } from './forwardController';
 import { fileTransferNotice } from './fileNotices';
+import { PrivateChatProfiles } from './privateChatProfiles';
 import { RESOURCE_MIME } from './resourceClipboard';
 import { SlashCommands, SlashInvocation } from './slashCommands';
 import { availableSlashCommands, exactSlashCommand } from './slashCatalog';
@@ -53,6 +54,7 @@ export class QQApp implements vscode.Disposable {
   private historyRequests = new Map<string, { reconnect: boolean; since: number }>();
   private tabs: ChatTabs;
   notifications?: NotificationSync;
+  private profiles?: PrivateChatProfiles;
   private notificationTimer?: NodeJS.Timeout;
   store?: ChatStore;
   transcript?: Transcript;
@@ -230,6 +232,7 @@ export class QQApp implements vscode.Disposable {
     if (this.epoch === generation) this.resetConnection();
   }
   private resetConnection(): void {
+    this.profiles = undefined;
     clearTimeout(this.initializationRetry);
     this.session.advance(); this.historyQueue.clear(); this.historyLoaded.clear(); this.ready = false; this.queued = [];
     this.slash.clearResults(); this.forwards.clear();
@@ -262,6 +265,8 @@ export class QQApp implements vscode.Disposable {
     if (epoch !== this.epoch || this.stopped) return;
     const syncSince = new Map([...this.store!.chats.values()].map(c => [c.key, c.lastTime]));
     this.ready = true;
+    const store = this.store!;
+    this.profiles = new PrivateChatProfiles(store, this.client, () => store === this.store && epoch === this.epoch && this.ready);
     const queued = this.queued; this.queued = [];
     for (const event of queued) this.onEvent(event);
     // Restored conversations already have an identity; do not make their
@@ -377,6 +382,7 @@ export class QQApp implements vscode.Disposable {
     for (const chat of store.chats.values()) if (chat.type === 'group') store.setNotification(chat.key, 'unknown');
     this.notifications = new NotificationSync(store, this.client);
     void this.notifications.refresh();
+    void this.profiles?.refresh();
   }
   private onEvent(event: any): void {
     const store = this.store;
@@ -403,6 +409,7 @@ export class QQApp implements vscode.Disposable {
         store.upsert(newChat(key.type, key.id, key.type === 'private' ? message.senderName : key.id));
       }
       if (this.outbox.observeEcho(store, event, message)) return;
+      void this.profiles?.observe(message);
       if (message.senderId === store.selfId && message.fileIds?.length) {
         const local = store.messages.get(message.chatKey)?.find(m => m.id.startsWith('local:') && m.fileIds?.some(f => message.fileIds!.includes(f)));
         if (local) { store.settleOutgoing(message.chatKey, local.id, { ...local, ...message }); return; }
@@ -448,6 +455,7 @@ export class QQApp implements vscode.Disposable {
   }
   private async notifyMessage(store: ChatStore, message: Message): Promise<void> {
     const key = message.chatKey;
+    await this.profiles?.ensure(key);
     const replyToSelf = await this.resolveReply(store, message).catch(() => false);
     if (store === this.store && replyToSelf) store.markReplyToSelf(key);
     await this.notifications?.ensure(key);

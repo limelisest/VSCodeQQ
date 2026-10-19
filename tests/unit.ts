@@ -1,4 +1,6 @@
 import './historyEdits';
+import './messageCards';
+import './privateChatProfiles';
 import './mediaLimits';
 import './forwardDelivery';
 import './forwardSources';

@@ -24,6 +24,7 @@ export class MockNapCat {
   url = '';
   imageUrl = '';
   calls: any[] = [];
+  strangerNames = new Map<string, string>();
   sent: any[] = [];
   sentMessages = new Map<number, any>();
   loginFailures = 0;
@@ -90,6 +91,7 @@ export class MockNapCat {
         case 'get_group_files_by_folder': respond({ files: [{ file_id: 'mock-file', file_name: '测试文件.txt', file_size: 100, busid: 102 }], folders: [] }); break;
         case 'get_csrf_token': respond({ token: 'mock-sensitive-value' }); break;
         case 'get_login_info': if (this.loginFailures-- > 0) { respond(null, 'failed'); break; } respond({ user_id: 123456, nickname: '测试账号' }); break;
+        case 'get_stranger_info': respond({ user_id: req.params.user_id, nickname: this.strangerNames.get(String(req.params.user_id)) ?? String(req.params.user_id) }); break;
         case 'get_friend_list': if (this.listDelay) await new Promise(r => setTimeout(r, this.listDelay)); this.listResponses++; respond([{ user_id: 10001, nickname: '张三', remark: '测试好友' }]); break;
         case 'get_group_list': if (this.listDelay) await new Promise(r => setTimeout(r, this.listDelay)); this.listResponses++; respond([{ group_id: 20001, group_name: '原生界面验证群' }, { group_id: 20002, group_name: '另一个会话' }]); break;
         case 'get_group_detail_info': respond({ cmdUinMsgMask: this.masks.get(String(req.params.group_id)) }); break;

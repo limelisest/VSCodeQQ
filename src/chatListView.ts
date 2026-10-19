@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { ChatTree } from './tree';
 import { ChatStore } from './store';
 import { allowsUnread } from './notifications';
+import { systemChatName } from './systemChats';
 
 // TreeView does not expose an embedded input. Keep filtering/sorting in ChatTree
 // and use a small theme-aware view for a permanent search field.
@@ -51,6 +52,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
     const store = this.store();
     const rows = this.tree.getChildren('', true).map(chat => ({
       key: chat.key, name: chat.name, id: chat.id, kind: chat.type,
+      system: !!systemChatName(chat.type, chat.id),
       search: `${chat.name} ${chat.remark ?? ''} ${chat.nickname ?? ''} ${chat.id}`.toLocaleLowerCase(),
       collapsed: !!store?.collapsed.has(chat.key), preview: chat.preview, favorite: !!store?.favorites.has(chat.key), unread: chat.unread,
       mention: chat.mentioned, reply: chat.replied, muted: !allowsUnread(chat), tooltip: this.tree.getTreeItem(chat).tooltip
@@ -74,7 +76,7 @@ let rows=[],account='',selected='',active='',composing=false,touched=false,colla
 function save(){vscode.setState({query:input.value,collapsed});}
 input.value=vscode.getState()?.query||'';
 function send(type,key){vscode.postMessage({type,key,account});}
-function icon(name){const node=document.createElement('span');node.className='codicon codicon-'+name;node.setAttribute('aria-hidden','true');node.textContent=String.fromCodePoint({account:0xeb99,organization:0xea7e,'star-full':0xeb59,'star-empty':0xea6a,archive:0xea98,discard:0xeae2}[name]);return node;}
+function icon(name){const node=document.createElement('span');node.className='codicon codicon-'+name;node.setAttribute('aria-hidden','true');node.textContent=String.fromCodePoint({account:0xeb99,organization:0xea7e,mail:0xeb1c,'star-full':0xeb59,'star-empty':0xea6a,archive:0xea98,discard:0xeae2}[name]);return node;}
 function boxIcon(){return icon('archive');}
 function unreadBadge(unread,muted,prefix=''){const count=document.createElement('span');count.className='count'+(muted?' muted':'');count.textContent=prefix+(unread>99?'99+':unread);count.title=unread+' 条未读'+(muted?' · 不提醒':'');return count;}
 function render(){
@@ -87,7 +89,7 @@ function render(){
  for(const row of visible){
   const item=document.createElement('div');item.className='row'+(row.key===selected?' selected':'')+(row.favorite?' starred':'')+(row.key===active?' active':'');item.dataset.key=row.key;item.tabIndex=row.key===selected?0:-1;item.setAttribute('role','option');item.setAttribute('aria-selected',String(row.key===selected));if(row.key===active)item.setAttribute('aria-current','true');item.title=row.tooltip||row.name;
   item.dataset.vscodeContext=JSON.stringify({webviewSection:'qq-chat-row',key:row.key,account,chatType:row.kind,preventDefaultContextMenuItems:true});
-  const kind=icon(row.favorite?'star-full':row.kind==='group'?'organization':'account');kind.classList.add('kind');kind.title=row.favorite?'已收藏':row.kind==='group'?'群聊':'好友';kind.removeAttribute('aria-hidden');kind.setAttribute('role','img');kind.setAttribute('aria-label',kind.title);
+  const kind=icon(row.favorite?'star-full':row.system?'mail':row.kind==='group'?'organization':'account');kind.classList.add('kind');kind.title=(row.favorite?'已收藏 · ':'')+(row.system?'系统通知':row.kind==='group'?'群聊':'好友');kind.removeAttribute('aria-hidden');kind.setAttribute('role','img');kind.setAttribute('aria-label',kind.title);
   const text=document.createElement('div');text.className='text';const name=document.createElement('div');name.className='name';name.textContent=row.name;const preview=document.createElement('div');preview.className='preview';preview.textContent=(row.muted?'◦ ':'')+(row.preview||row.id);text.append(name,preview);item.append(kind,text);
   if(row.unread)item.append(unreadBadge(row.unread,row.muted,row.mention?'@ ':row.reply?'↩ ':''));
   const actions=document.createElement('div');actions.className='row-actions';

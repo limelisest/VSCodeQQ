@@ -1,5 +1,7 @@
 import { outgoingReply } from './replies';
 import { randomUUID } from 'node:crypto';
+import { chatDisplayName } from './systemChats';
+import { messageCard, MessageCard } from './messageCards';
 
 export type ChatType = 'group' | 'private';
 export interface Chat {
@@ -20,7 +22,7 @@ export function mediaFilename(value: unknown, url?: string): string | undefined 
 }
 export interface FileRef { id: string; name: string; url?: string; busid?: number; size?: number; }
 export type Segment =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; card?: MessageCard }
   | { type: 'mention'; qq: string; name?: string; text: string }
   | { type: 'file'; file: FileRef; text: string }
   | { type: 'face'; id: string; text: string }
@@ -35,6 +37,7 @@ export function normalizeSegments(segments: unknown[]): Segment[] {
     if (s.type === 'image' && s.image && typeof s.image.file === 'string') return [{ type: 'image', image: s.image }];
     if (s.type === 'video' && s.video && typeof s.video.file === 'string') return [{ type: 'video', video: s.video, text: '[视频]' }];
     if (typeof s.text !== 'string') return [];
+    if (s.type === 'text' && ['json', 'xml'].includes(s.card?.format) && typeof s.card?.data === 'string') return [messageCard(s.card.format, s.card.data)];
     if (s.type === 'forward' && typeof s.id === 'string') return [{ type: 'forward', id: s.id, text: '[合并转发]', ...(Array.isArray(s.content) ? { content: s.content } : {}) }];
     if ((s.type === 'file' || s.type === 'text') && s.file && typeof s.file.name === 'string') return [{ type: 'file', file: s.file, text: s.text }];
     const qq = s.type === 'mention' ? s.qq : s.type === 'text' ? s.at : undefined;
@@ -107,7 +110,7 @@ export function splitKey(key: string): { type: ChatType; id: string } {
 }
 export function newChat(type: ChatType, value: unknown, name: unknown): Chat {
   const key = chatKey(type, value); splitKey(key);
-  return { key, type, id: id(value), name: inline(name) || id(value), unread: 0, mentioned: false, lastTime: 0, preview: '' };
+  return { key, type, id: id(value), name: chatDisplayName(type, id(value), inline(name)), unread: 0, mentioned: false, lastTime: 0, preview: '' };
 }
 export function parseMessage(raw: any, key?: string, selfId = ''): Message {
   if (!raw || typeof raw !== 'object') throw new Error('无效的消息');
@@ -125,7 +128,8 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
   result.senderTitle = inline(raw.sender?.title);
   result.senderNickname = inline(raw.sender?.nickname);
   result.senderRole = ['owner', 'admin', 'member'].includes(raw.sender?.role) ? raw.sender.role : undefined;
-  splitKey(result.chatKey);
+  const chat = splitKey(result.chatKey);
+  if (chat.type === 'private') result.senderName = chatDisplayName(chat.type, senderId, result.senderName);
   const input = Array.isArray(raw.message) ? raw.message : [{ type: 'text', data: { text: String(raw.message ?? raw.raw_message ?? '') } }];
   for (const part of input) {
     if (!part || typeof part !== 'object') continue;
@@ -148,9 +152,10 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
           const card = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
           if (card?.app === 'com.tencent.multimsg') forwardId = id(card.meta?.detail?.resid);
         } catch { /* Ordinary or malformed cards remain text placeholders. */ }
-        result.segments.push(forwardId ? { type: 'forward', id: forwardId, text: '[合并转发]' } : { type: 'text', text: '[卡片]' });
+        result.segments.push(forwardId ? { type: 'forward', id: forwardId, text: '[合并转发]' } : messageCard('json', data.data));
         break;
       }
+      case 'xml': result.segments.push(messageCard('xml', data.data)); break;
       case 'reply': result.replyId = id(data.id) || undefined; break;
       case 'at': {
         const qq = id(data.qq);

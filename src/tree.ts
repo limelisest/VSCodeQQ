@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Chat } from './model';
 import { ChatStore } from './store';
 import { allowsUnread } from './notifications';
+import { systemChatName } from './systemChats';
 export type Section = 'list';
 export class ChatTree implements vscode.Disposable {
   private emitter = new vscode.EventEmitter<Chat | undefined>();
@@ -24,11 +25,12 @@ export class ChatTree implements vscode.Disposable {
   getTreeItem(chat: Chat): vscode.TreeItem {
     const node = new vscode.TreeItem(chat.name);
     node.id = `${this.section}:${chat.key}`; node.contextValue = 'qq-chat';
-    const mode = chat.ignoreUnread ? '已设为不提醒' : chat.type === 'private' ? '好友免打扰未同步；可右键设为不提醒' : chat.notification === 'muted' ? 'QQ 免打扰' : chat.notification === 'notify' ? 'QQ 接收并提醒' : '免打扰状态未知，显示未读但暂不提醒和置顶';
+    const system = !!systemChatName(chat.type, chat.id);
+    const mode = chat.ignoreUnread ? '已设为不提醒' : system ? '系统通知；可右键设为不提醒' : chat.type === 'private' ? '好友免打扰未同步；可右键设为不提醒' : chat.notification === 'muted' ? 'QQ 免打扰' : chat.notification === 'notify' ? 'QQ 接收并提醒' : '免打扰状态未知，显示未读但暂不提醒和置顶';
     const allowed = allowsUnread(chat);
     node.description = `${!allowed ? '◦ ' : ''}${chat.mentioned ? '@我 ' : ''}${chat.replied ? '回复我 ' : ''}${chat.unread ? `(${chat.unread}) ` : ''}${chat.preview}`.trim();
     node.tooltip = `${chat.name}\n${chat.type === 'group' ? '群号' : 'QQ'}：${chat.id}\n${mode}${chat.preview ? `\n${chat.preview}` : ''}`;
-    node.iconPath = new vscode.ThemeIcon(this.getStore()?.favorites.has(chat.key) ? 'star-full' : chat.type === 'group' ? 'organization' : 'account');
+    node.iconPath = new vscode.ThemeIcon(this.getStore()?.favorites.has(chat.key) ? 'star-full' : system ? 'mail' : chat.type === 'group' ? 'organization' : 'account');
     node.command = { command: 'qq.openChat', title: '打开会话', arguments: [chat.key] };
     return node;
   }
