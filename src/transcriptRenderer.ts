@@ -11,10 +11,7 @@ export const codeString = (text: string): string => JSON.stringify(text).slice(1
   .replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
 export function renderTranscript(chat: Chat, messages: Message[], selfId: string, language: CodeLanguage = 'c'): Rendered {
   const style = codeStyle(language);
-  // Keep the newline escape in its own literal: a trailing URL must end
-  // before it, otherwise VS Code's native link detector includes the \n.
-  const lineBreak = `"${style.join} "\\n"${style.join}`;
-  const escape = (text: string) => text.split('\n').map(part => style.escape(codeString(part))).join(lineBreak + ' "');
+  const escape = (text: string) => style.escape(codeString(text));
   const quote = (text: string) => `"${escape(text)}"`;
   const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} ${TRANSCRIPT_HELP}`, ''];
   const rendered: Rendered = { text: '', forwards: [], images: [], videos: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
@@ -114,11 +111,13 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
         resources.push({ type: 'file', index, name: part.file.name, alias: { line: lines.length, start: current.length, end: current.length + label.length, messageId: m.id } });
         current += label;
       } else {
-        const parts = part.text.split('\n');
+        const parts = part.text.replace(/\r\n/g, '\n').split('\n');
         for (let index = 0; index < parts.length; index++) {
-          if (index) { lines.push(current + lineBreak); current = style.continuation; }
-          const text = escape(parts[index]);
-          current += text;
+          if (index) {
+            lines.push(current);
+            current = '    ';
+          }
+          current += escape(parts[index]);
         }
       }
     }

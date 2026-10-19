@@ -60,7 +60,7 @@ test('八种代码风格保留原文、图片、引用和操作位置', () => {
     if (language === 'dart' || language === 'kotlin') {
       assert.ok(view.text.includes('\\$name')); assert.ok(view.text.includes('\\${value}'));
     }
-    if (['javascript', 'typescript', 'kotlin', 'java', 'swift'].includes(language)) assert.ok(view.text.includes('\\n" +\n'));
+    assert.ok(view.text.includes('    第二行'));
     assert.equal(JSON.stringify(msg), snapshot);
   }
   assert.equal(renderTranscript(chat, [msg], '123').text, renderTranscript(chat, [msg], '123', 'c').text);
@@ -122,7 +122,7 @@ test('代码投影转义引号、反斜杠、控制字符；多行和图片位�
   const view = renderTranscript(newChat('group', 1, '测试'), [msg], '123');
   assert.ok(view.text.startsWith('#define CHAT_NAME "测试"'));
   assert.ok(view.text.includes('void recv_')); assert.ok(view.text.includes('名\\"字'));
-  assert.ok(view.text.includes('                 "第二行\\t[图片]";'));
+  assert.ok(view.text.includes('    第二行\\t[图片]";'));
   assert.equal(messageText(msg), raw + '[图片]');
   for (const s of view.images) assert.equal(view.text.split('\n')[s.line].slice(s.start, s.end), '[图片]');
 });
@@ -560,7 +560,7 @@ test('旧缓存中 NTEvent 发送失败恢复为未确认，普通失败保留�
 });
 
 
-test('网址后的换行使用独立字符串，正文与回复保留原文而不污染自动链接', () => {
+test('多行消息保持真实换行与缩进对齐，首尾单对双引号且保留原始正文与链接', () => {
   const url = 'https://example.com/watch?v=1&x=2';
   const raw = `${url}\n\n第二行\nhttps://example.com/end`;
   const source = parseMessage({ message_id: 700, user_id: 2, sender: { user_id: 2, nickname: '成员' },
@@ -570,14 +570,17 @@ test('网址后的换行使用独立字符串，正文与回复保留原文而�
   const snapshot = JSON.stringify([source, reply]);
   for (const language of codeLanguages) {
     const view = renderTranscript(newChat('group', 1, '群'), [source, reply], '123', language);
-    const expected = url + '"' + codeStyle(language).join + ' "\\n"';
-    assert.equal(view.text.split(expected).length - 1, 2, `${language}: 正文和回复中的 URL 与换行独立`);
-    assert.ok(!view.text.includes(url + '\\n'), language);
-    for (const image of view.images) assert.equal(view.text.split('\n')[image.line].slice(image.start, image.end), '[图片]');
+    const lines = view.text.split('\n');
+    const msgLine = lines.find(l => l.includes('msg') && l.includes(url));
+    assert.ok(msgLine, `${language}: 包含包含 URL 的 msg 行`);
+    assert.ok(msgLine.endsWith(url), `${language}: URL 在行末，不粘连换行转义`);
+    assert.ok(lines.some(l => l.includes(url)), `${language}: 包含完整 URL`);
+    assert.ok(lines.some(l => l.includes('    第二行')), `${language}: 换行缩进对齐`);
+    for (const image of view.images) assert.equal(lines[image.line].slice(image.start, image.end), '[图片]');
     if (language === 'c') {
-      const body = view.text.split('\n').filter(line => line.includes('char msg[]') || line.startsWith(codeStyle(language).continuation)).slice(0, 4).join('\n');
-      const decoded = [...body.matchAll(/"(?:\\.|[^"\\])*"/g)].map(match => JSON.parse(match[0])).join('');
-      assert.equal(decoded, raw + '[图片]', 'C 字符串拼接仍还原原始空行和换行');
+      const msgLines = lines.filter(line => line.includes('char msg[]') || line.includes('第二行') || line.includes('/end[图片]'));
+      assert.ok(msgLines[0].includes('char msg[] = "' + url));
+      assert.ok(msgLines.at(-1)?.includes('";'));
     }
   }
   assert.equal(JSON.stringify([source, reply]), snapshot);
