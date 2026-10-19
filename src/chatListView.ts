@@ -97,7 +97,7 @@ function render(){
  }
  results.replaceChildren(fragment);results.scrollTop=scroll;
  if(focused)[...results.children].find(row=>row.dataset.key===selected)?.focus({preventScroll:true});
- document.getElementById('empty').textContent=visible.length?'':input.value.trim()?'没有匹配的会话':collapsed?'收纳箱为空':account?'暂无会话，请在下方设置中连接 NapCat':'请在下方设置中连接 NapCat';
+ document.getElementById('empty').textContent=visible.length?'':input.value.trim()?'没有匹配的会话':collapsed?'收纳箱为空':account?'暂无会话':'请在下方设置中连接 OneBot 服务';
  document.getElementById('count').textContent=input.value.trim()?visible.length+' 个结果':'';
 }
 function revealActive(){[...results.children].find(row=>row.dataset.key===active)?.scrollIntoView({block:'nearest'});}

@@ -142,7 +142,7 @@ export class ForwardController implements vscode.Disposable {
       check();
       const result = await this.host.client.call('get_forward_msg', { message_id: candidate });
       check();
-      if (!forwardNodes(result)?.length) throw new OneBotRequestError('rejected', 'NapCat 返回了空的合并转发内容');
+      if (!forwardNodes(result)?.length) throw new OneBotRequestError('rejected', '服务端返回了空的合并转发内容');
       return result;
     };
     const data = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在读取合并转发' }, async () => {
@@ -152,7 +152,7 @@ export class ForwardController implements vscode.Disposable {
       catch (error) {
         this.output.appendLine(`初次查询失败：${error instanceof Error ? error.message : String(error)}`);
         check();
-        // Numeric IDs of nested nodes cannot be queried by NapCat. Only refresh real chat messages.
+        // Numeric IDs of nested nodes cannot be queried by OneBot. Only refresh real chat messages.
         if (!(error instanceof OneBotRequestError) || error.kind !== 'rejected' || !messageId || !/^-?\d+$/.test(messageId)) throw error;
         this.output.appendLine('尝试刷新原消息 get_msg');
         const raw = await this.host.client.call('get_msg', { message_id: messageId });
@@ -163,8 +163,7 @@ export class ForwardController implements vscode.Disposable {
         if (refreshed.content?.length) return { messages: refreshed.content };
         const alternatives = [...new Set([
           ...(refreshed.id && refreshed.id !== id ? [refreshed.id] : []),
-          // NapCat can resolve a top-level forward through the original message's
-          // cached peer/history even when its resource-ID protocol fallback fails.
+          // Resolve a top-level forward through the original message's cached peer/history
           ...(index === 0 && messageId !== id ? [messageId] : [])
         ])];
         let lastError: unknown = error;
@@ -188,7 +187,7 @@ export class ForwardController implements vscode.Disposable {
     }).then(undefined, (error: unknown) => {
       this.output.appendLine(`读取结束：${error instanceof Error ? error.message : String(error)}`);
       if (error instanceof OneBotRequestError && error.kind === 'rejected') {
-        throw new Error('NapCat 无法读取这条合并转发。请在 QQ 中查看；错误详情见“输出 → QQ 转发诊断”。');
+        throw new Error('服务端无法读取该合并转发内容。请在 QQ 中查看；错误详情见“输出 → QQ 转发诊断”。');
       }
       throw error;
     });

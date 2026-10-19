@@ -30,9 +30,9 @@ export class Configuration {
     await settings.update('autoConnect', autoConnect, vscode.ConfigurationTarget.Global);
   }
   async configure(): Promise<boolean> {
-    const url = await vscode.window.showInputBox({ title: 'NapCat OneBot WebSocket 地址', value: this.url, validateInput: validateUrl, ignoreFocusOut: true });
+    const url = await vscode.window.showInputBox({ title: 'OneBot v11 WebSocket 地址', prompt: '例如 ws://127.0.0.1:3001（支持 NapCat、Lagrange 等服务）', value: this.url, validateInput: validateUrl, ignoreFocusOut: true });
     if (url === undefined) return false;
-    const token = await vscode.window.showInputBox({ title: 'NapCat Token（没有鉴权则留空）', password: true, value: await this.token(), ignoreFocusOut: true });
+    const token = await vscode.window.showInputBox({ title: 'OneBot Access Token', prompt: '服务端未启用鉴权可直接留空', password: true, value: await this.token(), ignoreFocusOut: true });
     if (token === undefined) return false;
     await this.save(url, token); return true;
   }

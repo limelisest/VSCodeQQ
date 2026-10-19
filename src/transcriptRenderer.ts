@@ -43,7 +43,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     if (m.sendState === 'sending' && m.sendProgress) {
       const p = m.sendProgress, percent = p.total ? Math.min(100, Math.floor(p.sent / p.total * 100)) : 0;
       const filled = Math.floor(percent / 10);
-      state = p.stage === 'confirm' ? '附件已传至 NapCat · 等待 QQ 确认…' : `上传到 NapCat [${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${percent}% · ${(p.sent / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB${p.bytesPerSecond ? ` · ${(p.bytesPerSecond / 1048576).toFixed(2)} MB/s` : ''}`;
+      state = p.stage === 'confirm' ? '附件已上传完成 · 等待服务端确认…' : `上传中 [${'█'.repeat(filled)}${'░'.repeat(10 - filled)}] ${percent}% · ${(p.sent / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB${p.bytesPerSecond ? ` · ${(p.bytesPerSecond / 1048576).toFixed(2)} MB/s` : ''}`;
     }
     lines.push(style.constant('DATE', [quote(stamp)]));
     const fn = self ? (m.replyId ? 'send_reply' : 'send') : (m.replyId ? 'reply' : 'recv');

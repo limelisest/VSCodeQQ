@@ -10,7 +10,7 @@ export function forwardNodes(data: unknown): unknown[] | undefined {
 // Forward nodes do not necessarily have a message ID, and repeated IDs are valid.
 export function parseForwardMessages(data: unknown, key: string): Message[] {
   const nodes = forwardNodes(data);
-  if (!Array.isArray(nodes)) throw new Error('NapCat 未返回有效的合并转发内容');
+  if (!Array.isArray(nodes)) throw new Error('服务端未返回有效的合并转发内容');
   const parsed = nodes.map(value => {
     if (!value || typeof value !== 'object') throw new Error('合并转发包含无效消息');
     const raw = value as Record<string, any>;

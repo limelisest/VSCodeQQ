@@ -136,9 +136,9 @@ export class QQApp implements vscode.Disposable {
         if (!chat || !invocation) return [];
         return availableSlashCommands(chat.type).map((command, index) => {
           const label = '/' + command.name;
-          const item = new vscode.CompletionItem({ label, description: command.description }, vscode.CompletionItemKind.Function);
+          const item = new vscode.CompletionItem({ label, description: command.category }, vscode.CompletionItemKind.Function);
           item.detail = command.description;
-          item.documentation = new vscode.MarkdownString(`${command.category} · ${command.description}\n\n选择后打开操作或参数选择框，Esc 取消。`);
+          item.documentation = new vscode.MarkdownString(`### ${label}\n\n**功能**：${command.description}  \n**类别**：${command.category}\n\n*选择后按提示输入参数，按 Esc 可随时取消。*`);
           item.range = range; item.insertText = ''; item.filterText = label; item.sortText = String(index).padStart(3, '0');
           item.command = { command: 'qq.slash', title: label, arguments: [command.name, invocation] };
           return item;
@@ -241,7 +241,7 @@ export class QQApp implements vscode.Disposable {
     this.updateStatus('连接中');
     await this.client.connect(this.config.url, token);
     await this.initialization;
-    if (!this.ready) throw new Error('NapCat 初始化未完成，请查看 QQ 输出日志');
+    if (!this.ready) throw new Error('OneBot 服务初始化未完成，请查看“输出 → QQ”日志');
   }
   private async initializeWithRetry(epoch: number, attempt = 0): Promise<void> {
     try { this.updateStatus('同步中'); await this.initialize(epoch); }
@@ -256,7 +256,7 @@ export class QQApp implements vscode.Disposable {
   private async initialize(epoch: number): Promise<void> {
     const info = await this.client.call('get_login_info');
     const selfId = id(info?.user_id);
-    if (!/^\d+$/.test(selfId)) throw new Error('NapCat 没有返回有效的登录账号');
+    if (!/^\d+$/.test(selfId)) throw new Error('OneBot 服务端未返回有效的登录账号');
     if (epoch !== this.epoch || this.stopped) return;
     await this.bindAccount(selfId);
     if (epoch !== this.epoch || this.stopped) return;
@@ -274,7 +274,7 @@ export class QQApp implements vscode.Disposable {
     this.notificationTimer = setInterval(() => { if (this.ready) void this.notifications?.refresh(); }, 60000);
     void this.cleanCache().catch(error => this.log(error));
     clearInterval(this.cacheTimer); this.cacheTimer = setInterval(() => { void this.cleanCache().catch(error => this.log(error)); }, 3600000);
-    this.output.appendLine('NapCat 连接成功，会话列表已加载。');
+    this.output.appendLine('OneBot 服务连接成功，会话列表已加载。');
   }
   private openChatKeys(): string[] {
     const active = vscode.window.activeTextEditor;
@@ -363,7 +363,7 @@ export class QQApp implements vscode.Disposable {
     return this.session.run('refresh', () => this.refreshOnce());
   }
   private async refreshOnce(): Promise<void> {
-    if (!this.client.connected || !this.store) throw new Error('请先连接 NapCat');
+    if (!this.client.connected || !this.store) throw new Error('请先连接 OneBot 服务');
     const store = this.store, epoch = this.epoch;
     const [friends, groups] = await Promise.all([this.client.call('get_friend_list'), this.client.call('get_group_list')]);
     if (store !== this.store || epoch !== this.epoch) return;
@@ -606,7 +606,7 @@ export class QQApp implements vscode.Disposable {
     if (openDoc && !this.native.region(openDoc)) throw new Error('草稿分隔线被修改，发送已暂停。请先重建聊天文档');
     if (!text.trim() && !store.draft(key).attachments.some(a => !a.placeholder)) return;
     if (text.length > 65536) throw new Error('消息过长，请拆分后发送');
-    if (!this.ready) throw new Error('NapCat 未连接，草稿已保留');
+    if (!this.ready) throw new Error('OneBot 服务未连接，草稿已保留');
     const pendingKey = `${store.selfId}:${key}`;
     if (this.submitting.has(pendingKey)) return;
     if (replyId && (!/^-?\d+$/.test(replyId) || replyId === '0')) throw new Error('这条消息暂时无法引用');
@@ -805,7 +805,7 @@ export class QQApp implements vscode.Disposable {
           if (typeof result?.url === 'string') url = result.url;
         } catch (error) { if (!url) throw error; }
       }
-      if (!url) throw new Error('NapCat 未提供文件下载地址，请检查文件是否已过期');
+      if (!url) throw new Error('服务端未提供文件下载地址，请检查文件是否已过期');
       check();
       const source = url;
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `下载 ${safeName}`, cancellable: true }, async (progress, token) => {
@@ -923,7 +923,7 @@ export class QQApp implements vscode.Disposable {
   private updateStatus(text: string): void {
     this.settingsTree.status = text; this.settingsTree.refresh();
     this.status.text = `$(${this.ready ? 'comment-discussion' : 'debug-disconnect'}) QQ · ${text}`;
-    this.status.tooltip = 'NapCat / OneBot v11 · 点击重新连接'; this.emojis.update();
+    this.status.tooltip = 'OneBot v11 · 点击重新连接'; this.emojis.update();
   }
   private log(error: unknown): void { this.output.appendLine(`[${new Date().toISOString()}] ${error instanceof Error ? error.message : String(error)}`); }
   async shutdown(): Promise<void> {

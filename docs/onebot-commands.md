@@ -15,7 +15,7 @@
 
 ## 指令清单
 
-共 79 个指令。涉及服务端数据的功能受当前 NapCat 版本、QQ 状态和群权限约束。列表中的“修改”表示会改动 QQ 或后端数据；执行前展示目标和参数供确认。重连或账号切换会让尚未提交的旧操作失效；已提交但超时的修改不会自动重试。
+共 79 个指令。涉及服务端数据的功能受当前 OneBot 服务端实现、QQ 状态和群权限约束。列表中的“修改”表示会改动 QQ 或后端数据；执行前展示目标和参数供确认。重连或账号切换会让尚未提交的旧操作失效；已提交但超时的修改不会自动重试。
 
 | 指令 | 中文说明 | 可用会话 | 类型 |
 | --- | --- | --- | --- |
@@ -53,7 +53,7 @@
 | /members | 查看当前群成员列表 | 群聊 | 查询 |
 | /honors | 查看群荣誉 | 群聊 | 查询 |
 | /status | 查看 OneBot 运行状态 | 群聊 / 私聊 | 查询 |
-| /version | 查看 NapCat 和协议版本 | 群聊 / 私聊 | 查询 |
+| /version | 查看 OneBot 服务端和协议版本 | 群聊 / 私聊 | 查询 |
 | /can_image | 检查图片发送能力 | 群聊 / 私聊 | 查询 |
 | /can_voice | 检查语音发送能力 | 群聊 / 私聊 | 查询 |
 | /image_info | 获取图片文件信息 | 群聊 / 私聊 | 查询 |
@@ -98,7 +98,7 @@
 | /csrf | 查看 QQ CSRF Token（敏感） | 群聊 / 私聊 | 查询 |
 | /credentials | 查看指定域名的 QQ 凭证（敏感） | 群聊 / 私聊 | 查询 |
 | /restart | 重启 OneBot 后端，连接将中断 | 群聊 / 私聊 | 修改 |
-| /backend_cache | 清理 NapCat 和 QQ 的图片、语音、视频与文件缓存 | 群聊 / 私聊 | 修改 |
+| /backend_cache | 清理 OneBot 服务端和 QQ 的图片、语音、视频与文件缓存 | 群聊 / 私聊 | 修改 |
 
 ## OneBot v11 公开 API 对照
 
@@ -119,7 +119,7 @@
 | get_status / get_version_info / set_restart / clean_cache | /status、/version、/restart、/backend_cache |
 | set_group_anonymous / set_group_anonymous_ban | 当前 NapCat 注册表没有启用，不提供无效入口 |
 
-## 已接入的 NapCat 扩展
+## 已接入的扩展能力（如 NapCat 等）
 
 - 消息：单条转发、表情回应、戳一戳。
 - 群聊：公告、精华、签到、@全体剩余次数、禁言列表、群备注。
@@ -132,8 +132,8 @@
 - /requests 仅收集当前插件连接期间收到的申请事件，按账号隔离、最多保留 100 条，不写入磁盘；/group_requests 可另外查询服务端群系统消息。已在其他客户端处理或过期的申请可能被后端拒绝，成功后才从本地移除。
 - /group_files 当前每个目录读取前 200 个条目；下载使用本机保存对话框和临时文件，取消或失败不会覆盖目标文件。/folder_delete 会删除指定文件夹及其内容，确认时应核对对象。
 - Cookies、CSRF 和凭证属于高级入口，仅在临时只读文档中显示；不自动复制或记录到输出日志，关闭文档、断线或切换账号后清除对应结果。后端权限和支持程度由实际返回决定。
-- /backend_cache 清理的是 NapCat / QQ 后端缓存，包含图片、语音、视频和文件，与插件自身的附件缓存清理不同。/restart 会中断后端连接。
+- /backend_cache 清理的是 OneBot 服务端 / QQ 缓存，包含图片、语音、视频和文件，与插件自身的附件缓存清理不同。/restart 会中断后端连接。
 - 语音、视频等在聊天正文中仍为文字占位；/record_info 获取文件信息，未实现录音、视频播放或全部消息段的发送 UI。合并转发支持只读代码风格阅读、图片预览、嵌套展开；/forward 转发已有单条消息，/merge_forward 按原顺序合并转发勾选的消息，不提供伪造发送者或自定义节点内容。
-- NapCat 的相册、AI 语音、空间、频道、数据包、头像、机器人管理等扩展尚未提供专用入口。没有添加任意 JSON / 原始数据包执行器；后续功能沿同一指令目录扩展。
+- 服务端的高级扩展（如相册、AI 语音、空间等）尚未提供专用入口。没有添加任意 JSON / 原始数据包执行器；后续功能沿同一指令目录扩展。
 
 接口参考：[OneBot v11](https://github.com/botuniverse/onebot-11)、[NapCat API 一览](https://napneko.github.io/onebot/api)、[NapCat 接口和参数源码](https://github.com/NapNeko/NapCatQQ/tree/main/packages/napcat-onebot/action)。

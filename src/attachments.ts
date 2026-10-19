@@ -103,7 +103,7 @@ export class AttachmentFiles {
         if (!basicFaces.some(face => face.id === attachment.faceId)) throw new Error('无效的 QQ 表情');
         segments.push({ type: 'face', data: { id: attachment.faceId } });
       } else {
-        if (attachment.kind === 'file' || attachment.kind === 'video') throw new Error('文件和视频必须先上传到 NapCat');
+        if (attachment.kind === 'file' || attachment.kind === 'video') throw new Error('文件和视频需通过服务端接口流式发送');
         const bytes = await this.read(attachment);
         segments.push({ type: 'image', data: { file: `base64://${bytes.toString('base64')}`, ...(attachment.sticker ? { sub_type: 1 } : {}) } });
       }

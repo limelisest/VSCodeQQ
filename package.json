@@ -1,12 +1,21 @@
 {
   "name": "limelisest-napcat-qq",
-  "displayName": "NapCat QQ · Native Chat",
-  "description": "使用原生编辑器聊天的 NapCat / OneBot v11 QQ 客户端。",
-  "version": "0.2.19-dev1",
+  "displayName": "OneBot QQ · Native Chat",
+  "description": "在 VS Code 原生编辑器中畅聊 QQ，推荐搭配 SnowLuma 使用，亦全面兼容 NapCat、Lagrange、LLOneBot 等任意 OneBot v11 服务。",
+  "version": "0.2.19",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
-  "keywords": ["qq", "napcat", "onebot", "chat", "聊天"],
+  "keywords": [
+    "snowluma",
+    "onebot",
+    "onebotv11",
+    "qq",
+    "napcat",
+    "lagrange",
+    "chat",
+    "聊天"
+  ],
   "pricing": "Free",
   "galleryBanner": {
     "color": "#111827",
@@ -78,7 +87,7 @@
     "viewsWelcome": [
       {
         "view": "qq.list",
-        "contents": "暂无会话。\n[连接设置](command:qq.configure)\n[连接 NapCat](command:qq.connect)"
+        "contents": "暂无会话。\n[连接设置](command:qq.configure)\n[连接 OneBot 服务](command:qq.connect)"
       }
     ],
     "commands": [
@@ -88,7 +97,7 @@
       },
       {
         "command": "qq.connect",
-        "title": "QQ: 连接 / 重新连接 NapCat",
+        "title": "QQ: 连接 / 重新连接 OneBot 服务",
         "icon": "$(plug)"
       },
       {
@@ -520,19 +529,19 @@
           ],
           "default": "c",
           "scope": "application",
-          "description": "聊天记录的代码语言显示风格。保存后立即刷新，保留草稿和消息原文。"
+          "description": "聊天记录的代码语言高亮风格（支持 C、Python、JS、TS、Java 等）。保存后立即生效，不影响草稿和消息原文。"
         },
         "qq.wsUrl": {
           "type": "string",
           "default": "ws://127.0.0.1:3001",
           "scope": "application",
-          "description": "NapCat OneBot v11 正向 WebSocket 地址。Token 通过 QQ: 设置连接地址与 Token 保存。"
+          "description": "OneBot v11 正向 WebSocket 服务地址（如 ws://127.0.0.1:3001，推荐搭配 SnowLuma，亦支持 NapCat、Lagrange 等后端）。Token 通过安全存储保存。"
         },
         "qq.autoConnect": {
           "type": "boolean",
           "default": true,
           "scope": "application",
-          "description": "打开 QQ 视图时自动连接。"
+          "description": "打开 QQ 侧边栏视图时自动尝试连接。"
         },
         "qq.historyCount": {
           "type": "number",
@@ -540,7 +549,7 @@
           "minimum": 10,
           "maximum": 500,
           "scope": "application",
-          "description": "首次打开会话拉取的历史消息数。"
+          "description": "首次打开会话时拉取的历史消息条数。"
         },
         "qq.messageLimit": {
           "type": "number",
@@ -548,7 +557,7 @@
           "minimum": 50,
           "maximum": 2000,
           "scope": "application",
-          "description": "每个会话显示和缓存的消息上限。"
+          "description": "每个会话在编辑器中显示与本地缓存的消息上限。"
         },
         "qq.notifications": {
           "type": "string",
@@ -559,7 +568,7 @@
           ],
           "default": "all",
           "scope": "application",
-          "description": "新消息弹窗提醒范围；不影响未读和高亮。"
+          "description": "新消息弹窗通知范围（全部新消息 / 仅提及和回复 / 关闭弹窗，不影响未读计数与高亮）。"
         },
         "qq.cacheRetentionDays": {
           "type": "number",
@@ -567,30 +576,31 @@
           "maximum": 90,
           "default": 7,
           "scope": "application",
-          "description": "无引用附件缓存保留天数。"
+          "description": "无引用附件的本地临时缓存保留天数（草稿、历史图片及未完成发送文件受保护）。"
         },
         "qq.mentionColor": {
           "type": "string",
           "pattern": "^#[0-9a-fA-F]{6}$",
           "default": "#E5A030",
           "scope": "application",
-          "description": "@我消息高亮颜色（背景自动淡化）。"
+          "description": "@我 消息在编辑器中的高亮颜色（自动应用淡化背景与左侧边条）。"
         },
         "qq.replyColor": {
           "type": "string",
           "pattern": "^#[0-9a-fA-F]{6}$",
           "default": "#409CFF",
           "scope": "application",
-          "description": "回复我消息高亮颜色（背景自动淡化）。"
+          "description": "回复我 消息在编辑器中的高亮颜色（自动应用淡化背景与左侧边条）。"
         }
       }
     }
   },
   "dependencies": {
-    "ws": "^8.18.3",
-    "image-size": "^2.0.2"
+    "image-size": "^2.0.2",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@esbuild/win32-x64": "^0.28.2",
     "@types/node": "^22.19.0",
     "@types/vscode": "^1.95.0",
     "@types/ws": "^8.18.1",

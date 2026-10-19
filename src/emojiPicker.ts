@@ -87,7 +87,7 @@ export class EmojiPicker implements vscode.WebviewViewProvider {
         this.post({ type: 'basicFaces', account: store.selfId, key, faces: basicFaces });
         this.favoriteSources.clear();
         this.postRecent(store.selfId, key);
-        if (!this.host.ready) throw new Error('连接 NapCat 后可读取收藏表情');
+        if (!this.host.ready) throw new Error('请先连接 OneBot 服务后读取收藏表情');
         const faces = await this.host.client.call('fetch_custom_face', { count });
         if (!current() || request !== this.favoriteRequest) return;
         const entries = (Array.isArray(faces) ? faces : []).filter((u: unknown): u is string => typeof u === 'string' && /^https?:\/\//i.test(u)).slice(0, count).map((url: string, i: number) => {

@@ -50,7 +50,7 @@ export class MediaCache {
       const file = path.join(folder, hash + '.attachment');
       try { if (Date.now() - (await fs.stat(file)).mtimeMs < 7 * 86400000) return file; } catch {}
       const receive = async (url?: string) => {
-        if (!url || !/^https?:\/\//i.test(url)) throw new Error('NapCat 未提供可下载的文件地址');
+        if (!url || !/^https?:\/\//i.test(url)) throw new Error('服务端未提供可下载的文件地址');
         await downloadFile(url, file, AbortSignal.timeout(30 * 60 * 1000));
       };
       try { await receive(ref.url); }
@@ -79,7 +79,7 @@ export class MediaCache {
       }
       const temporary = path.join(folder, key + '.download');
       const receive = async (url?: string) => {
-        if (!url || !/^https?:\/\//i.test(url)) throw new Error('NapCat 未提供可下载的视频地址');
+        if (!url || !/^https?:\/\//i.test(url)) throw new Error('服务端未提供可下载的视频地址');
         await downloadFile(url, temporary, AbortSignal.timeout(30 * 60 * 1000));
       };
       try {

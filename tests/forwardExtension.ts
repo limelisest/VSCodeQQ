@@ -58,7 +58,7 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
   backend.forwardResults.set('nested-forward', { messages: [] });
   try {
     const [source, nestedMessage, nestedIndex] = JSON.parse(decodeURIComponent(nested.target!.query));
-    await assert.rejects(app.forwards.open(source, nestedMessage, nestedIndex), /NapCat 无法读取/);
+    await assert.rejects(app.forwards.open(source, nestedMessage, nestedIndex), /无法读取/);
     assert.equal(readers().length, nestedTabs, '内层查询为空必须报错，不能打开空白阅读页');
   } finally { backend.forwardResults.delete('nested-forward'); }
   assert.equal(app.store!.messages.get(key)?.some(m => m.id.startsWith('forward:')), false);
@@ -88,7 +88,7 @@ export async function testForwardCommands(app: QQApp, backend: MockNapCat, ui: T
       ['get_forward_msg', 'old-id'], ['get_msg', '99022'], ['get_forward_msg', '99022']
     ]);
     backend.rejectedForwardIds.add('99022');
-    await assert.rejects(app.forwards.open(editor.document.uri.toString(), '99022', 0), /NapCat 无法读取这条合并转发.*QQ 转发诊断/);
+    await assert.rejects(app.forwards.open(editor.document.uri.toString(), '99022', 0), /无法读取该合并转发内容.*QQ 转发诊断/);
   } finally { backend.rejectedForwardIds.clear(); }
 
   backend.forwardResults.set('old-id', { messages: [] });

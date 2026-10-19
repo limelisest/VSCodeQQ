@@ -667,7 +667,7 @@ export async function run(): Promise<void> {
     const sendingFiles = app.sendMessage('group:20002', app.native.draft(editor.document));
     await until(() => app!.native.draft(editor.document) === '');
     assert.ok(app.store!.messages.get('group:20002')!.some(m => m.sendState === 'sending' || m.sendState === 'queued'));
-    await until(() => editor.document.getText().includes('上传到 NapCat ['));
+    await until(() => editor.document.getText().includes('上传中 ['));
     // Writing another draft must remain possible while upload is running.
     await app.native.focus(editor); await editor.edit(edit => edit.insert(editor.selection.active, '上传时继续输入'));
     assert.equal(await sendingFiles, false);

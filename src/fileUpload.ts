@@ -33,13 +33,13 @@ export async function uploadToNapCat(client: OneBotClient, source: string,
         total_chunks, file_size: size, filename: `qq-${stream_id}${suffix}`, file_retention: 3600000
       }, 120000);
       check();
-      if (result?.status !== 'chunk_received' || result.received_chunks !== index + 1) throw new Error('NapCat 未确认文件分片，请检查版本是否支持上传文件流');
+      if (result?.status !== 'chunk_received' || result.received_chunks !== index + 1) throw new Error('服务端未确认文件分片，请检查 OneBot 服务端是否支持上传文件流');
       sent += length; progress({ stage: 'upload', sent, total: size, bytesPerSecond: sent / Math.max(0.001, (Date.now() - started) / 1000) });
     }
     check();
     const result = await client.call('upload_file_stream', { stream_id, is_complete: true }, 300000);
     check();
-    if (result?.status !== 'file_complete' || typeof result.file_path !== 'string' || !result.file_path || result.file_size !== size) throw new Error('NapCat 文件合并结果不完整');
+    if (result?.status !== 'file_complete' || typeof result.file_path !== 'string' || !result.file_path || result.file_size !== size) throw new Error('服务端文件合并结果不完整');
     progress({ stage: 'confirm', sent, total: size });
     return result.file_path;
   } finally { await handle.close(); }

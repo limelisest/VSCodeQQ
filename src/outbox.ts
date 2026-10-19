@@ -33,7 +33,7 @@ export class OutboxService {
   isBusy(account: string, key: string): boolean { return this.sendQueues.has(`${account}:${key}`); }
   async whenIdle(account: string, key: string): Promise<void> { await this.sendQueues.get(`${account}:${key}`); }
   submit(store: ChatStore, key: string, text: string, replyId?: string): Submission {
-    if (store !== this.host.store || !this.host.ready) throw new Error('NapCat 未连接，草稿已保留');
+    if (store !== this.host.store || !this.host.ready) throw new Error('OneBot 服务未连接，草稿已保留');
     const pendingKey = `${store.selfId}:${key}`;
     const draft = store.draft(key);
     const current = draft.text === text && draft.replyId === replyId ? draft : store.setDraft(key, text, replyId);
@@ -81,7 +81,7 @@ export class OutboxService {
       const current = () => store.messages.get(key)?.find(m => m.id === messageId);
       const message = current();
       if (store !== this.host.store || !message?.outgoing || message.recalled || !['failed', 'uncertain'].includes(message.sendState ?? '')) return false;
-      if (!this.host.ready) throw new Error('NapCat 未连接，消息仍保留在记录中');
+      if (!this.host.ready) throw new Error('OneBot 服务未连接，消息仍保留在记录中');
       if (message.sendState === 'failed' && isNapCatEventTimeout(message.sendError)) {
         message.sendState = 'uncertain'; store.enrichMessage(message);
       }
@@ -204,7 +204,7 @@ export class OutboxService {
           }
           return true;
         }
-        if (!/^-?\d+$/.test(messageId) || /^-?0+$/.test(messageId)) throw new Error('NapCat 未返回有效消息 ID，发送结果未确认，请先检查目标会话');
+        if (!/^-?\d+$/.test(messageId) || /^-?0+$/.test(messageId)) throw new Error('服务端未返回有效消息 ID，发送结果未确认，请检查目标会话');
         message.sendProgress = undefined;
         const settled = store.settleOutgoing(message.chatKey, message.id, { ...message, id: messageId });
         confirmed = true; sendReceipt?.close();
@@ -215,7 +215,7 @@ export class OutboxService {
         }
         return true;
       } catch (error: any) {
-        // A definitive success must survive later cache/detail errors. NapCat may
+        // A definitive success must survive later cache/detail errors. Server may
         // also reject upload_*_file after QQ has already accepted the file.
         if (confirmed || sendReceipt?.echo) { this.host.log(error); return true; }
         if (error instanceof OneBotRequestError && error.kind === 'rejected') sendReceipt?.close();
@@ -233,9 +233,9 @@ export class OutboxService {
         } else {
           message.sendState = fileRequested || requested && !(error instanceof OneBotRequestError && error.kind === 'rejected') ? 'uncertain' : 'failed';
           message.sendError = fileRequested
-            ? `文件已提交给 NapCat，可能已经发出。请先检查目标会话，避免重复发送。${error.message}`
+            ? `文件已提交给服务端，可能已经发出。请检查目标会话，避免重复发送。${error.message}`
             : requested && isNapCatEventTimeout(error.message)
-              ? `NapCat 等待发送事件超时，消息可能已送达。请先检查目标会话，再决定是否重试。${error.message}` : error.message;
+              ? `等待服务端发送响应超时，消息可能已送达。请检查目标会话，再决定是否重试。${error.message}` : error.message;
           if (fileRequested) this.host.log(`文件发送结果未确认：${error.message}`);
         }
         store.enrichMessage(message);

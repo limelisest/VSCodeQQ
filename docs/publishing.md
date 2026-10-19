@@ -7,7 +7,7 @@
 | 发布者 ID | `LimeLisest` |
 | 扩展名称 | `limelisest-napcat-qq` |
 | 完整标识 | `LimeLisest.limelisest-napcat-qq` |
-| 展示名称 | NapCat QQ · Native Chat |
+| 展示名称 | OneBot QQ · Native Chat |
 | 商店图标 | `media/icon.png`，256×256 PNG |
 
 GitHub 账号与 Marketplace 发布者分别管理。需要先用微软账号登录 [发布者管理页](https://marketplace.visualstudio.com/manage)，创建或取得 `LimeLisest` 发布者的权限。代码里的 `publisher` 字段不会创建商店账号。

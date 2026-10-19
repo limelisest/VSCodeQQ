@@ -47,7 +47,7 @@ export async function ensureForwardSources(client: Pick<OneBotClient, 'call'>, m
     // Recheck all nodes so a partially recovered selection is never sent.
     missing = new Set<string>();
     for (const message of selected) if (!await readable(message)) missing.add(message.id);
-    if (missing.size) throw new Error(`${missing.size} 条来源消息暂时无法从 NapCat 读取，已停止合并转发。请重新加载来源会话历史后再选择；不会只发送其余消息。`);
+    if (missing.size) throw new Error(`${missing.size} 条来源消息暂时无法从服务端读取，已停止合并转发。请重新加载来源会话历史后重试。`);
   }
   check();
 }

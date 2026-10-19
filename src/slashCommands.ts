@@ -55,7 +55,7 @@ export class SlashCommands implements vscode.Disposable {
     return this.host.session.run(JSON.stringify(['slash', name === 'requests' ? store.selfId : chat.key, name]), async () => {
       const context: SlashContext = { key: chat.key, id: chat.id, type: chat.type, name: chat.name, selfId: store.selfId };
       let requested = false;
-      const online = () => { check(); if (!this.host.ready || !this.host.client.connected) throw new Error('请先连接 NapCat，再使用 /' + name); };
+      const online = () => { check(); if (!this.host.ready || !this.host.client.connected) throw new Error('请先连接 OneBot 服务，再使用 /' + name); };
       const call = async (action: string, params: Record<string, unknown>) => {
         online();
         const result = await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `QQ · ${command.description}`, cancellable: false }, () => { online(); requested = true; return this.host.client.call(action, params); });
@@ -103,30 +103,30 @@ export class SlashCommands implements vscode.Disposable {
     });
   }
   private async askField(field: SlashField, name: string): Promise<string | boolean | undefined> {
-    if (field.kind === 'choice') return (await vscode.window.showQuickPick((field.choices ?? []).map(c => ({ label: c.label, value: c.value })), { title: `/${name} · ${field.label}` }))?.value;
-    return vscode.window.showInputBox({ title: `/${name} · ${field.label}`, prompt: field.label, value: field.initial, ignoreFocusOut: true, validateInput: value => validateSlashField(field, value) });
+    if (field.kind === 'choice') return (await vscode.window.showQuickPick((field.choices ?? []).map(c => ({ label: c.label, value: c.value })), { title: `/${name} · ${field.label}`, placeHolder: `请选择${field.label}` }))?.value;
+    return vscode.window.showInputBox({ title: `/${name} · ${field.label}`, prompt: `请输入${field.label}（按 Enter 确认，Esc 取消）`, value: field.initial, ignoreFocusOut: true, validateInput: value => validateSlashField(field, value) });
   }
   private async askUser(store: ChatStore, chat: Chat, check: () => void): Promise<string | undefined> {
     if (chat.type === 'group') await this.host.loadMembers(chat.key); check();
     const options = chat.type === 'group' ? [...store.members.get(chat.key)?.values() ?? []].map(m => ({ label: m.name, description: m.id, detail: m.nickname, value: m.id }))
       : [...store.chats.values()].filter(c => c.type === 'private').sort((a, b) => Number(b.key === chat.key) - Number(a.key === chat.key)).map(c => ({ label: c.name, description: c.id, detail: c.remark, value: c.id }));
-    const chosen = await vscode.window.showQuickPick([...options, { label: '输入 QQ 号…', description: '', value: '' }], { title: `选择用户 · ${chat.name}`, placeHolder: '按名称、备注或 QQ 号筛选', matchOnDescription: true, matchOnDetail: true });
+    const chosen = await vscode.window.showQuickPick([...options, { label: '$(edit) 输入 QQ 号…', description: '手动输入指定用户的 QQ 号', value: '' }], { title: `选择用户 · ${chat.name}`, placeHolder: '按名称、备注或 QQ 号筛选，或选择手动输入', matchOnDescription: true, matchOnDetail: true });
     check(); if (!chosen) return;
     return chosen.value || await this.askField({ key: 'user_id', label: 'QQ 号', kind: 'user' }, 'user') as string | undefined;
   }
   private async askMessage(store: ChatStore, chat: Chat, check: () => void): Promise<string | undefined> {
-    const options = [...store.displayMessages(chat.key)].filter(m => /^-?\d+$/.test(m.id) && Number(m.id) !== 0).reverse().map(m => ({ label: inline(messageText(m)).slice(0, 100) || '[空消息]', description: `${m.senderName} · ${m.id}`, value: m.id }));
-    const chosen = await vscode.window.showQuickPick([...options, { label: '输入消息 ID…', description: '', value: '' }], { title: `选择消息 · ${chat.name}`, placeHolder: '按正文、发送者或消息 ID 筛选', matchOnDescription: true });
+    const options = [...store.displayMessages(chat.key)].filter(m => /^-?\d+$/.test(m.id) && Number(m.id) !== 0).reverse().map(m => ({ label: inline(messageText(m)).slice(0, 100) || '[空消息]', description: `${m.senderName} · ID: ${m.id}`, value: m.id }));
+    const chosen = await vscode.window.showQuickPick([...options, { label: '$(edit) 输入消息 ID…', description: '手动输入指定消息的数字 ID', value: '' }], { title: `选择消息 · ${chat.name}`, placeHolder: '按消息正文、发送者或 ID 筛选，或选择手动输入', matchOnDescription: true });
     check(); if (!chosen) return;
     return chosen.value || await this.askField({ key: 'message_id', label: '消息 ID', kind: 'message' }, 'message') as string | undefined;
   }
   private async confirm(command: SlashCommand, context: SlashContext, params: Record<string, unknown>): Promise<boolean> {
     const labels: Record<string, string> = { user_id: 'QQ 号', message_id: '消息 ID', target: '转发目标', duration: '时长（秒）', enable: '启用', is_dismiss: '解散群聊' };
-    const details = Object.entries(params).filter(([key]) => key !== 'group_id').map(([key, value]) => `${command.fields?.find(f => f.key === key)?.label ?? labels[key] ?? key}：${String(value)}`).join('\n');
+    const details = Object.entries(params).filter(([key]) => key !== 'group_id').map(([key, value]) => `${command.fields?.find(f => f.key === key)?.label ?? labels[key] ?? key}：${String(value)}`).join('；');
     const selected = await vscode.window.showQuickPick([
-      { label: '取消', description: '返回草稿，不执行操作', value: false },
-      { label: '确认', description: command.confirm ?? command.description, detail: details, value: true }
-    ], { title: `确认操作 · /${command.name} · ${context.name} (${context.id})`, placeHolder: command.confirm ?? command.description, matchOnDescription: true, matchOnDetail: true });
+      { label: '确认', description: command.confirm ?? command.description, detail: details ? `参数：${details}` : undefined, value: true },
+      { label: '取消', description: '放弃本次操作并返回草稿', value: false }
+    ], { title: `确认操作 · /${command.name} · ${context.name} (${context.id})`, placeHolder: '请确认操作参数并选择是否执行（按 Esc 取消）', matchOnDescription: true, matchOnDetail: true });
     return selected?.value === true;
   }
   private async showResult(command: SlashCommand, data: unknown, check: () => void): Promise<void> {
@@ -174,7 +174,7 @@ export class SlashCommands implements vscode.Disposable {
       check(); if (!save) return;
       const dataUrl = await call('get_group_file_url', { group_id: chat.id, file_id: String(file.file_id), busid: file.busid });
       const url = dataUrl?.url ?? dataUrl?.file_url;
-      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new Error('NapCat 未返回有效下载链接');
+      if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new Error('服务端未返回有效下载链接');
       await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `下载 ${inline(file.file_name)}`, cancellable: true }, async (_progress, cancellation) => {
         check();
         const controller = new AbortController(), changed = cancellation.onCancellationRequested(() => controller.abort());
