@@ -9,7 +9,7 @@ export interface SlashField {
 }
 export interface SlashCommand {
   name: string; description: string; category: string; scope?: SlashScope;
-  local?: string; special?: 'help' | 'reply' | 'requests' | 'files' | 'poke';
+  local?: string; special?: 'help' | 'manage' | 'reply' | 'requests' | 'files' | 'poke';
   action?: string; fields?: SlashField[]; defaults?: Record<string, unknown>;
   group?: boolean; mutation?: boolean; confirm?: string; sensitive?: boolean;
 }
@@ -22,7 +22,7 @@ const query = (name: string, description: string, action: string, fields: SlashF
 const change = (name: string, description: string, action: string, fields: SlashField[], group = false): SlashCommand => ({ ...query(name, description, action, fields, group), category: group ? '群管理' : '操作', mutation: true, confirm: description });
 const groupChange = (name: string, description: string, action: string, fields: SlashField[], defaults?: Record<string, unknown>): SlashCommand => ({ ...change(name, description, action, fields, true), defaults });
 export const slashCommands: readonly SlashCommand[] = [
-  local('emoji', '打开表情与附件面板', 'qq.emojis'),
+  local('emoji', '打开表情面板', 'qq.emojis'),
   local('image', '选择图片插入草稿', 'qq.insertImage'),
   local('video', '选择视频插入草稿', 'qq.insertVideo'),
   local('file', '选择文件插入草稿', 'qq.insertFile'),
@@ -39,7 +39,8 @@ export const slashCommands: readonly SlashCommand[] = [
   local('settings', '打开连接与详细设置', 'qq.configure'),
   local('style', '切换聊天记录代码风格', 'qq.chooseCodeLanguage'),
   local('refresh', '刷新会话与联系人列表', 'qq.refresh'),
-  { name: 'help', description: '查看全部可用指令菜单', category: '帮助', special: 'help' },
+  { name: 'help', description: '查看常用指令菜单', category: '帮助', special: 'help' },
+  { name: 'manage', description: '群管理', category: '聊天', scope: 'group', special: 'manage' },
   change('recall', '撤回所选消息', 'delete_msg', [message]),
   query('message', '查看消息详情', 'get_msg', [message]),
   local('forward_info', '查看合并转发内容', 'qq.viewForward'),
@@ -105,6 +106,8 @@ export const slashCommands: readonly SlashCommand[] = [
   { ...change('backend_cache', '清理服务端媒体与文件缓存', 'clean_cache', []), category: '高级' }
 ];
 export const availableSlashCommands = (type: SlashScope): readonly SlashCommand[] => slashCommands.filter(command => !command.scope || command.scope === type);
+const menuNames = new Set(['emoji', 'image', 'video', 'file', 'mention', 'reply', 'cancel_reply', 'forward', 'recall', 'history', 'latest', 'search', 'manage']);
+export const menuSlashCommands = (type: SlashScope): readonly SlashCommand[] => availableSlashCommands(type).filter(command => menuNames.has(command.name));
 export function exactSlashCommand(text: string, type: SlashScope): SlashCommand | undefined {
   const match = /^\/([a-z][a-z0-9_]*)$/i.exec(text.trim());
   return match ? availableSlashCommands(type).find(command => command.name === match[1].toLowerCase()) : undefined;

@@ -16,7 +16,6 @@ export class EmojiCompletion implements vscode.CompletionItemProvider {
     item.range = new vscode.Range(position.line, match.index, position.line, position.character);
     // Accepting the candidate consumes only the trigger text; surrounding draft stays intact.
     item.insertText = ''; item.filterText = label;
-    item.detail = '选择补全后打开收藏表情，方向键选择、Enter 插入；Esc 取消补全不会打开';
     item.command = { command: 'qq.openEmojiPicker', title: '打开表情面板', arguments: [invocation] };
     return [item];
   }

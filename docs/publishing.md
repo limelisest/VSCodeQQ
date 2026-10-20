@@ -12,6 +12,12 @@
 
 GitHub 账号与 Marketplace 发布者分别管理。需要先用微软账号登录 [发布者管理页](https://marketplace.visualstudio.com/manage)，创建或取得 `LimeLisest` 发布者的权限。代码里的 `publisher` 字段不会创建商店账号。
 
+## 分支约定
+
+开发版的修改、提交和推送统一放在 `dev` 分支。`main` 用于正式版本；正式发布时，将验收通过的 `dev` 改动合并到 `main`，再完成正式版本提交、标签和发布。
+
+每次完成开发版修改后打包开发版 VSIX。正式版的 `CHANGELOG.md` 整理为正式发布说明，不保留逐个开发版日志。
+
 ## 构建安装包
 
 明确发布正式版本时，在项目根目录执行：

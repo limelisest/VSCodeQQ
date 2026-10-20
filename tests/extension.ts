@@ -852,13 +852,22 @@ export async function run(): Promise<void> {
     assert.ok(completions.items.some(item => completionLabel(item) === '/emoji'));
     for (const item of completions.items.filter(item => completionLabel(item).startsWith('/'))) {
       assert.match(completionLabel(item), /^\/[a-z][a-z0-9_]*$/);
-      assert.match(item.detail ?? '', /[\u4e00-\u9fff]/);
       assert.equal(typeof item.label, 'object', '候选行应直接显示中文说明');
+      assert.match((item.label as vscode.CompletionItemLabel).description ?? '', /[\u4e00-\u9fff]/);
+      assert.equal(item.detail, undefined);
+      assert.equal(item.documentation, undefined);
+      assert.equal(item.command?.command, completionLabel(item) === '/manage' ? 'editor.action.triggerSuggest' : undefined, '补全仅填入命令或继续下级候选');
     }
-    for (const name of ['recall', 'like', 'poke', 'ban', 'requests', 'group_files', 'notices', 'help']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
+    assert.equal(completions.items.filter(item => completionLabel(item).startsWith('/')).length, 13);
+    for (const name of ['recall', 'forward', 'manage', 'history', 'search']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
+    for (const name of ['status', 'version', 'cookies', 'restart', 'ban', 'requests', 'group_files']) assert.ok(!completions.items.some(item => completionLabel(item) === '/' + name));
     const sendsBeforePicker = backend.sent.length;
-    await editor.edit(edit => edit.insert(end, 'emoji'));
-    await until(() => app!.native.draft(editor.document) === '/emoji' && !app!.native.isUpdating(editor.document));
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await ui.waitFor("!!document.activeElement?.closest('.monaco-editor')");
+    await vscode.commands.executeCommand('editor.action.triggerSuggest');
+    await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/manage')`);
+    await ui.call('Input.insertText', { text: 'em' });
+    await until(() => app!.native.draft(editor.document) === '/em' && !app!.native.isUpdating(editor.document));
     const emojiEnd = editor.document.positionAt(editor.document.getText().length);
     editor.selection = new vscode.Selection(emojiEnd, emojiEnd);
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
@@ -866,9 +875,17 @@ export async function run(): Promise<void> {
     await vscode.commands.executeCommand('editor.action.triggerSuggest');
     await ui.waitFor(`!!document.querySelector('.suggest-widget.visible')`);
     await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/emoji')`);
+    await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('打开表情面板')`);
+    await ui.waitFor(`!document.querySelector('.suggest-widget.visible')?.textContent.includes('/manage') && !document.querySelector('.suggest-widget.visible')?.textContent.includes('/mention')`);
+    assert.equal(await ui.evaluate(`document.querySelector('.suggest-widget.visible')?.textContent.includes('聊天')`), false);
     await new Promise(r => setTimeout(r, 200));
     const slashShot = await ui.call('Page.captureScreenshot', { format: 'png' });
     await fs.writeFile(path.join(output, 'slash-commands.png'), Buffer.from(slashShot.data, 'base64'));
+    await ui.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await ui.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+    await until(() => app!.native.draft(editor.document) === '/emoji' && !app!.native.isUpdating(editor.document));
+    assert.equal((app.emojis as any).view?.visible ?? false, false, 'Tab 不能打开表情面板');
+    assert.equal(backend.sent.length, sendsBeforePicker, 'Tab 不能发送消息');
     await ui.enter();
     await until(() => app!.native.draft(editor.document) === '');
     const emojiUI = await ui.webview();
@@ -899,7 +916,7 @@ export async function run(): Promise<void> {
     await until(() => !(app!.emojis as any).view?.visible);
     assert.equal(app.native.draft(editor.document), beforeCancel);
     checks.push('精简表情面板、最近与收藏同列、最近使用缓存解码与排序、取消自动关闭');
-    checks.push('原生 / 指令补全、Enter 仅打开选择器、收藏图真实解码、方向键选择、Enter 插入与 Esc 返回');
+    checks.push('常用 / 指令显示中文操作，Tab 只补全、Enter 执行；收藏图真实解码、方向键选择、Enter 插入与 Esc 返回');
     // Additional reliability checks run in the isolated mock profile.
     app.store!.setDraft('group:20002', '', undefined, []); await app.native.sync(editor, true);
     assert.ok(completions.items.some(item => completionLabel(item) === '/file'));

@@ -19,7 +19,8 @@ import { fileTransferNotice } from './fileNotices';
 import { PrivateChatProfiles } from './privateChatProfiles';
 import { RESOURCE_MIME } from './resourceClipboard';
 import { SlashCommands, SlashInvocation } from './slashCommands';
-import { availableSlashCommands, exactSlashCommand } from './slashCatalog';
+import { menuSlashCommands, exactSlashCommand } from './slashCatalog';
+import { isManageLine, manageCommands, manageCompletion, parseManageLine } from './manageLine';
 import { boundReplies, outgoingReply } from './replies';
 import { Configuration, syncReminderColors } from './configuration';
 import { reminderColors } from './settingsSchema';
@@ -125,13 +126,42 @@ export class QQApp implements vscode.Disposable {
       provideCompletionItems: async (doc, position, token) => {
         const region = this.native.region(doc);
         if (!region || doc.offsetAt(position) < region.start) return [];
+        const key = this.transcript?.key(doc.uri), store = this.store, chat = key ? store?.chats.get(key) : undefined;
+        const draftBefore = doc.getText().slice(region.start, doc.offsetAt(position));
+        const lineBefore = store && key ? outgoingReply({ ...store.draft(key), text: draftBefore }).text : draftBefore;
+        const context = manageCompletion(lineBefore);
+        if (context && chat?.type === 'group' && store) {
+          const range = new vscode.Range(doc.positionAt(doc.offsetAt(position) - (lineBefore.length - context.start)), position);
+          const make = (label: string, description: string, insertText = label + ' ', kind = vscode.CompletionItemKind.Function) => {
+            const item = new vscode.CompletionItem({ label, description }, kind);
+            item.range = range; item.insertText = insertText; item.filterText = context.prefix + ' ' + label;
+            return item;
+          };
+          if (!context.command) return new vscode.CompletionList(manageCommands().filter(command => command.name.startsWith(context.prefix.toLowerCase())).map(command => {
+            const item = make(command.name, command.description);
+            if (command.fields?.length) item.command = { command: 'editor.action.triggerSuggest', title: '' };
+            return item;
+          }), true);
+          if (context.field?.kind === 'user') {
+            await this.loadMembers(chat.key);
+            if (token.isCancellationRequested || store !== this.store) return [];
+            const prefix = context.prefix.replace(/^@/, '').toLowerCase();
+            return new vscode.CompletionList([...store.members.get(chat.key)?.values() ?? []]
+              .filter(member => `${member.name} ${member.nickname ?? ''} ${member.id}`.toLowerCase().includes(prefix))
+              .map(member => make('@' + member.name, member.id, store.reserveMention(chat.key, member.id, member.name) + ' ', vscode.CompletionItemKind.User)), true);
+          }
+          if (context.field?.kind === 'integer') {
+            const values = [...new Set([context.field.initial, ...(context.field.key === 'duration' ? ['60', '300', '1800', '3600'] : [])].filter((value): value is string => !!value))];
+            return new vscode.CompletionList(values.filter(value => value.startsWith(context.prefix)).map(value => make(value, context.field!.label, value)), true);
+          }
+          if (context.field?.kind === 'message') return new vscode.CompletionList((store.messages.get(chat.key) ?? []).filter(message => message.id.startsWith(context.prefix)).map(message => make(message.id, message.senderName, message.id)), true);
+          return [];
+        }
         const before = doc.lineAt(position.line).text.slice(0, position.character);
         const match = /(?:^|\s)(\/[a-z0-9_]*)$/i.exec(before);
         if (!match) {
           const at = /(?:^|[^A-Za-z0-9_])@([^\s@\[\]]*)$/.exec(before);
-          const key = this.transcript?.key(doc.uri);
           if (!at || !key?.startsWith('group:')) return [];
-          const store = this.store;
           await this.loadMembers(key);
           if (token.isCancellationRequested || store !== this.store) return [];
           const range = new vscode.Range(position.line, before.lastIndexOf('@'), position.line, position.character);
@@ -141,20 +171,17 @@ export class QQApp implements vscode.Disposable {
           });
         }
         const range = new vscode.Range(position.translate(0, -match[1].length), position);
-        const key = this.transcript?.key(doc.uri), chat = key && this.store?.chats.get(key);
-        const invocation = this.slash.capture(doc.uri);
-        if (!chat || !invocation) return [];
-        return availableSlashCommands(chat.type).map((command, index) => {
+        if (!chat) return [];
+        return new vscode.CompletionList(menuSlashCommands(chat.type).filter(command => ('/' + command.name).startsWith(match[1].toLowerCase())).map((command, index) => {
           const label = '/' + command.name;
-          const item = new vscode.CompletionItem({ label, description: command.category }, vscode.CompletionItemKind.Function);
-          item.detail = command.description;
-          item.documentation = new vscode.MarkdownString(`### ${label}\n\n**功能**：${command.description}  \n**类别**：${command.category}\n\n*选择后按提示输入参数，按 Esc 可随时取消。*`);
-          item.range = range; item.insertText = ''; item.filterText = label; item.sortText = String(index).padStart(3, '0');
-          item.command = { command: 'qq.slash', title: label, arguments: [command.name, invocation] };
+          const item = new vscode.CompletionItem({ label, description: command.description }, vscode.CompletionItemKind.Function);
+          item.range = range; item.insertText = command.name === 'manage' ? '/manage ' : label;
+          if (command.name === 'manage') item.command = { command: 'editor.action.triggerSuggest', title: '' };
+          item.filterText = label; item.sortText = String(index).padStart(3, '0');
           return item;
-        });
+        }), true);
       }
-    }, '/', '@'));
+    }, '/', '@', ' '));
     this.disposables.push(vscode.languages.registerDocumentLinkProvider(selector, {
       provideDocumentLinks: doc => [...(this.native.historyMatches(doc) ? this.transcript?.provideDocumentLinks(doc) ?? [] : []), ...this.native.links(doc)]
     }), vscode.languages.registerHoverProvider(selector, {
@@ -712,11 +739,56 @@ export class QQApp implements vscode.Disposable {
     register('qq.search.list', () => this.searchList('list'));
     register('qq.clearSearch.list', () => this.filterList('list', ''));
     register('qq.focusInput', () => this.focusInput());
+    register('qq.acceptCompletion', async () => {
+      const editor = vscode.window.activeTextEditor, store = this.store;
+      const key = editor && this.transcript?.key(editor.document.uri), token = this.session.capture();
+      const before = editor && key && store ? outgoingReply({ ...store.draft(key), text: this.native.draft(editor.document) }).text : '';
+      const slash = !!editor && !!key && this.native.inDraft(editor) && (isManageLine(before) || /(?:^|\s)\/[a-z0-9_]*$/i.test(editor.document.lineAt(editor.selection.active.line).text.slice(0, editor.selection.active.character)));
+      await vscode.commands.executeCommand('acceptSelectedSuggestion');
+      if (!slash || !editor || !key || !store || store !== this.store || !token.current() || vscode.window.activeTextEditor !== editor) return;
+      const chat = store.chats.get(key), text = this.native.draft(editor.document);
+      const line = outgoingReply({ ...store.draft(key), text }).text;
+      if (chat && isManageLine(line)) {
+        try { parseManageLine(line, store.draft(key).mentions, [...store.members.get(key)?.values() ?? []]); } catch { return; }
+        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+      } else if (chat && exactSlashCommand(line, chat.type)) {
+        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+      }
+    });
+    register('qq.manage', async () => {
+      const editor = vscode.window.activeTextEditor, store = this.store;
+      const key = editor && this.transcript?.key(editor.document.uri);
+      if (!editor || !store || !key || store.chats.get(key)?.type !== 'group') return;
+      const region = this.native.region(editor.document), text = this.native.draft(editor.document);
+      if (!region) return;
+      const line = outgoingReply({ ...store.draft(key), text }).text;
+      if (line.trim() && !/^\/manage$/i.test(line.trim())) return;
+      const keep = boundReplies(text, store.draft(key).replies).map(reply => reply.token).join('');
+      await editor.edit(edit => edit.replace(new vscode.Range(editor.document.positionAt(region.start), editor.document.positionAt(region.start + text.length)), keep + '/manage '));
+      await this.native.focus(editor);
+      await vscode.commands.executeCommand('editor.action.triggerSuggest');
+    });
     register('qq.send', async (uri?: string) => {
       const editor = vscode.window.activeTextEditor, key = editor && this.transcript?.key(editor.document.uri);
       if (!editor || !key) return;
       if (uri && editor.document.uri.toString() !== vscode.Uri.parse(uri).toString()) return;
       const text = this.native.draft(editor.document), chat = this.store?.chats.get(key);
+      const store = this.store, line = store && outgoingReply({ ...store.draft(key), text }).text;
+      if (store && chat && line && isManageLine(line)) {
+        if (chat.type !== 'group') throw new Error('群管理仅用于群聊');
+        if (/^\s*\/manage\s*$/i.test(line)) { await vscode.commands.executeCommand('qq.manage'); return; }
+        const token = this.session.capture(), invocation = this.slash.capture(editor.document.uri);
+        await this.loadMembers(key);
+        if (store !== this.store || !token.current() || vscode.window.activeTextEditor !== editor || this.native.draft(editor.document) !== text) return;
+        const parsed = parseManageLine(line, store.draft(key).mentions, [...store.members.get(key)?.values() ?? []]);
+        if (invocation) await this.slash.run(parsed.command.name, invocation, parsed.values, async () => {
+          if (store !== this.store || !token.current() || editor.document.isClosed || this.native.draft(editor.document) !== text) return;
+          const region = this.native.region(editor.document);
+          const keep = boundReplies(text, store.draft(key).replies).map(reply => reply.token).join('');
+          if (region) await editor.edit(edit => edit.replace(new vscode.Range(editor.document.positionAt(region.start), editor.document.positionAt(region.start + text.length)), keep));
+        });
+        return;
+      }
       const command = chat && exactSlashCommand(outgoingReply({ ...this.store!.draft(key), text }).text, chat.type);
       if (command) {
         const invocation = this.slash.capture(editor.document.uri), region = this.native.region(editor.document);

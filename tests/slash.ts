@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { availableSlashCommands, exactSlashCommand, executeSlashApi, slashCommands, SlashIO, validateSlashField } from '../src/slashCatalog';
+import { availableSlashCommands, menuSlashCommands, exactSlashCommand, executeSlashApi, slashCommands, SlashIO, validateSlashField } from '../src/slashCatalog';
+import { commandWords, manageCompletion, parseManageLine } from '../src/manageLine';
 import { RequestInbox } from '../src/requestInbox';
 import { AccountSession } from '../src/accountSession';
 import { OneBotClient } from '../src/onebot';
@@ -16,6 +17,11 @@ test('指令名全部英文、说明中文，私聊不提供群管理，完整�
   for (const name of ['emoji', 'image', 'video', 'file', 'mention', 'recall', 'status', 'requests', 'group_files']) assert.ok(command(name));
   assert.equal(availableSlashCommands('private').some(c => c.name === 'ban'), false);
   assert.equal(availableSlashCommands('group').some(c => c.name === 'ban'), true);
+  assert.equal(menuSlashCommands('group').length, 13);
+  assert.equal(menuSlashCommands('private').length, 11);
+  assert.ok(menuSlashCommands('group').some(c => c.name === 'manage'));
+  assert.ok(!menuSlashCommands('private').some(c => c.name === 'manage'));
+  assert.ok(!menuSlashCommands('group').some(c => c.sensitive || ['ban', 'status', 'restart', 'backend_cache'].includes(c.name)));
   assert.equal(exactSlashCommand(' /STATUS\n', 'group')?.name, 'status');
   for (const text of ['/表情', '正文 /status', '/status 文字', '//status', '/unknown', '/status\n第二行']) assert.equal(exactSlashCommand(text, 'group'), undefined);
   assert.equal(exactSlashCommand('/mention', 'private'), undefined);
@@ -86,4 +92,23 @@ test('申请按账号隔离和去重，验证群邀请类型，容量有界且�
   inbox.add({ ...friend, self_id: 999999 }, '999999');
   assert.equal(inbox.entries('123456').length, 0); assert.equal(inbox.entries('999999').length, 1);
   inbox.clear(); assert.equal(inbox.entries('999999').length, 0);
+});
+
+
+test('群管理按主命令、子命令和参数解析，绑定成员并验证默认值、引号与重名', () => {
+  const members = [{ id: '10001', name: '群成员', nickname: '昵称' }, { id: '10002', name: '重名' }, { id: '10003', name: '重名' }];
+  const parse = (text: string) => parseManageLine(text, { '[@:含 空格]': '10001' }, members);
+  assert.deepEqual(parse('/manage ban @群成员').values, { user_id: '10001', duration: '1800' });
+  assert.deepEqual(parse('/manage ban [@:含 空格] 60').values, { user_id: '10001', duration: '60' });
+  assert.deepEqual(parse('/manage unban @[10001]').values, { user_id: '10001' });
+  assert.deepEqual(parse('/MANAGE ban 10001 0').values, { user_id: '10001', duration: '0' });
+  assert.deepEqual(parse('/manage card @昵称 "新 名片"').values, { user_id: '10001', card: '新 名片' });
+  assert.deepEqual(parse('/manage card 10001 ""').values, { user_id: '10001', card: '' });
+  assert.deepEqual(parse('/manage notice 多行\n公告 正文').values, { content: '多行 公告 正文' });
+  for (const text of ['/manage ban', '/manage status', '/manage ban @重名', '/manage ban @陌生人', '/manage ban [@:伪造]', '/manage ban 10001 -1', '/manage ban 10001 2592001', '/manage ban 10001 60 多余', '/manage ban_all 多余', '/manage rename "未闭合']) assert.throws(() => parse(text), text);
+  assert.equal(manageCompletion('/manage ba')?.prefix, 'ba');
+  assert.equal(manageCompletion('/manage ban ')?.field?.kind, 'user');
+  assert.equal(manageCompletion('/manage ban [@:含 空格] ')?.field?.key, 'duration');
+  assert.equal(manageCompletion('聊天 /manage ban'), undefined);
+  assert.equal(commandWords('/manage card 10001 "a \\"b\\""')[3].closed, true);
 });

@@ -2,7 +2,7 @@
   "name": "limelisest-napcat-qq",
   "displayName": "OneBot QQ · Native Chat",
   "description": "在 VS Code 原生编辑器中畅聊 QQ，推荐搭配 SnowLuma 使用，亦全面兼容 NapCat、Lagrange、LLOneBot 等任意 OneBot v11 服务。",
-  "version": "0.2.21",
+  "version": "0.2.22-dev2",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
@@ -432,6 +432,11 @@
       ]
     },
     "keybindings": [
+      {
+        "command": "qq.acceptCompletion",
+        "key": "enter",
+        "when": "editorTextFocus && resourceScheme == qqchat && qq.inDraft && !isComposing && suggestWidgetVisible && suggestWidgetHasFocusedSuggestion"
+      },
       {
         "command": "qq.reply",
         "key": "ctrl+shift+r",

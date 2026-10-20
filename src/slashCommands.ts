@@ -9,7 +9,7 @@ import { Transcript } from './transcript';
 import { Chat, inline, messageText } from './model';
 import { downloadFile } from './download';
 import { RequestInbox } from './requestInbox';
-import { SlashCommand, SlashContext, SlashField, availableSlashCommands, executeSlashApi, slashCommands, validateSlashField } from './slashCatalog';
+import { SlashCommand, SlashContext, SlashField, menuSlashCommands, executeSlashApi, slashCommands, validateSlashField } from './slashCatalog';
 
 interface SlashHost {
   store?: ChatStore; target?: string; client: OneBotClient; session: AccountSession;
@@ -36,7 +36,7 @@ export class SlashCommands implements vscode.Disposable {
     for (const key of all ? this.results.keys() : this.sensitive) { this.results.delete(key); this.changed.fire(vscode.Uri.parse(key)); }
     this.sensitive.clear();
   }
-  async run(name?: string, invocation?: SlashInvocation): Promise<void> {
+  async run(name?: string, invocation?: SlashInvocation, values?: Record<string, string>, completed?: () => Promise<void>): Promise<void> {
     const store = this.host.store, token = this.host.session.capture();
     const active = vscode.window.activeTextEditor;
     const uri = invocation?.uri ? vscode.Uri.parse(invocation.uri) : active?.document.uri;
@@ -44,9 +44,10 @@ export class SlashCommands implements vscode.Disposable {
     const chat = key && store?.chats.get(key);
     if (!store || !chat || (invocation && (invocation.account !== store.selfId || invocation.generation !== token.generation || active?.document.uri.toString() !== invocation.uri))) throw new Error('会话或连接已变化，请在聊天草稿中重新选择指令');
     const check = () => { if (!token.current() || this.host.store !== store || !store.chats.has(chat.key)) throw new Error('账号或连接已变化，操作已停止，请重新选择指令'); };
+    if (name === 'manage') { check(); await vscode.commands.executeCommand('qq.manage'); return; }
     if (!name || name === 'help') {
       return this.host.session.run(JSON.stringify(['slash-menu', chat.key]), async () => {
-        const chosen = await vscode.window.showQuickPick(availableSlashCommands(chat.type).filter(c => c.name !== 'help').map(c => ({ label: '/' + c.name, description: c.description, detail: c.category, value: c.name })), { title: `QQ 指令 · ${chat.name}`, placeHolder: '输入英文指令或中文说明搜索', matchOnDescription: true, matchOnDetail: true });
+        const chosen = await vscode.window.showQuickPick(menuSlashCommands(chat.type).map(c => ({ label: c.description, description: '/' + c.name, value: c.name })), { title: `QQ 指令 · ${chat.name}`, matchOnDescription: true });
         check(); if (chosen) await this.run(chosen.value, invocation); return;
       });
     }
@@ -81,7 +82,7 @@ export class SlashCommands implements vscode.Disposable {
         }
         await executeSlashApi(command, context, {
           check: online,
-          ask: field => field.kind === 'user' ? this.askUser(store, chat, check) : field.kind === 'message' ? this.askMessage(store, chat, check) : this.askField(field, name),
+          ask: field => values ? Promise.resolve(values[field.key]) : field.kind === 'user' ? this.askUser(store, chat, check) : field.kind === 'message' ? this.askMessage(store, chat, check) : this.askField(field, name),
           confirm: (command, context, params) => this.confirm(command, context, params),
           call,
           result: async (command, result, params) => {
@@ -94,6 +95,7 @@ export class SlashCommands implements vscode.Disposable {
               if (name === 'group_remark') store.upsert({ ...chat, remark: String(params.remark) });
               void vscode.window.showInformationMessage(`QQ · ${command.description}：操作成功`);
             } else await this.showResult(command, result, check);
+            if (completed) { check(); await completed(); }
           }
         });
       } catch (error) {
