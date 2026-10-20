@@ -36,12 +36,23 @@ export async function testEmojiShortcuts(app: QQApp, backend: MockNapCat, ui: Te
     await until(() => (app.emojis as any).view?.visible === true && app.native.draft(editor.document) === '左边右边');
     const panel = await ui.webview();
     await until(async () => await panel.evaluate(`!document.getElementById('favoriteFaces').hidden && document.querySelectorAll('#favoriteFaces button').length === 2 && [...document.querySelectorAll('#favoriteFaces img')].every(i => i.complete && i.naturalWidth > 0 && !i.hidden)`));
-    await until(async () => await panel.evaluate(`document.activeElement === document.querySelector('#favoriteFaces button')`));
+    await until(async () => await panel.evaluate(`document.activeElement === document.querySelector('#recentFaces button, #favoriteFaces button')`));
     await panel.key('ArrowRight', 39);
-    assert.equal(await panel.evaluate(`document.activeElement === document.querySelectorAll('#favoriteFaces button')[1]`), true);
+    assert.equal(await panel.evaluate(`document.activeElement === document.querySelectorAll('#recentFaces button, #favoriteFaces button')[1]`), true);
+    const selectedId = await panel.evaluate(`document.activeElement.dataset.id`) as string;
     await panel.key('Enter', 13);
-    await until(() => /^左边\[图片:\d+\]右边$/.test(app.native.draft(editor.document)) && !(app.emojis as any).view?.visible);
-    assert.equal(app.store!.draft(key).attachments.at(-1)?.sticker, true);
+    try { await until(() => {
+      const attachment = app.store!.draft(key).attachments[0];
+      return !!attachment?.placeholder && app.native.draft(editor.document) === `左边${attachment.placeholder}右边` && !(app.emojis as any).view?.visible;
+    }); }
+    catch (error) {
+      console.log('快捷表情插入失败', JSON.stringify({ trigger, draft: app.native.draft(editor.document), stored: app.store!.draft(key).text, visible: (app.emojis as any).view?.visible, selection: editor.selection, focused: await panel.evaluate(`({tag:document.activeElement?.tagName,id:document.activeElement?.dataset.id,parent:document.activeElement?.parentElement?.id,error:document.getElementById('error')?.textContent})`).catch(() => undefined) }));
+      throw error;
+    }
+    const attachment = app.store!.draft(key).attachments.at(-1)!;
+    if (selectedId.startsWith('face:')) {
+      assert.equal(attachment.kind, 'face'); assert.equal(attachment.faceId, selectedId.slice(5));
+    } else { assert.equal(attachment.kind, 'image'); assert.equal(attachment.sticker, true); }
     assert.equal(backend.sent.length, before, '打开面板及选择表情都不能自动发送');
     app.store!.setDraft(key, '', undefined, []);
     await until(() => app.native.draft(editor.document) === '' && !app.native.isUpdating(editor.document));

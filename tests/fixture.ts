@@ -25,6 +25,9 @@ export class MockNapCat {
   imageUrl = '';
   calls: any[] = [];
   strangerNames = new Map<string, string>();
+  appName = 'MockNapCat';
+  favoriteUrls?: string[];
+  favoriteIgnoreCount = false;
   sent: any[] = [];
   sentMessages = new Map<number, any>();
   loginFailures = 0;
@@ -84,7 +87,7 @@ export class MockNapCat {
           ] }); break;
         case 'forward_group_single_msg': case 'forward_friend_single_msg': case 'send_group_forward_msg': case 'send_private_forward_msg': respond({ message_id: 99001 }); break;
         case 'get_status': respond({ online: true, good: true }); break;
-        case 'get_version_info': respond({ app_name: 'MockNapCat', app_version: 'test', protocol_version: 'v11' }); break;
+        case 'get_version_info': respond({ app_name: this.appName, app_version: 'test', protocol_version: 'v11' }); break;
         case 'can_send_image': case 'can_send_record': respond({ yes: true }); break;
         case 'get_group_info': respond({ group_id: req.params.group_id, group_name: '原生界面验证群', member_count: 2 }); break;
         case 'get_group_root_files': respond({ files: [], folders: [{ folder_id: 'mock-folder', folder_name: '测试文件夹' }] }); break;
@@ -104,7 +107,10 @@ export class MockNapCat {
           respond({ messages: [...this.history(), ...this.historyExtra] }); break;
         }
         case 'get_image': respond({ url: this.imageUrl }); break;
-        case 'fetch_custom_face': respond([this.imageUrl, this.imageUrl + '?second']); break;
+        case 'fetch_custom_face': {
+          const faces = this.favoriteUrls ?? [this.imageUrl, this.imageUrl + '?second'];
+          respond(this.favoriteIgnoreCount ? faces : faces.slice(0, Number(req.params.count) || 48)); break;
+        }
         case 'get_msg':
           if (this.detailDelay) await new Promise(resolve => setTimeout(resolve, this.detailDelay));
           respond(this.sentMessages.get(Number(req.params.message_id))); break;

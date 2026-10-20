@@ -3,14 +3,17 @@ import { ChatStore } from './store';
 import { Transcript } from './transcript';
 import { AttachmentFiles } from './attachments';
 import { NativeEditor } from './nativeEditor';
+import { reminderColors } from './settingsSchema';
 interface EditorHost {
   store?: ChatStore; transcript?: Transcript; attachments?: AttachmentFiles;
   checkRead(): void;
+  refreshUnreadStatus(): void;
 }
 type Anchor = { messageId?: string; offset: number; character: number; draftOffset?: number };
 type ViewSnapshot = { editor: vscode.TextEditor; follow: boolean; top: Anchor; selections: { anchor: Anchor; active: Anchor }[] };
 export class ChatEditorController implements vscode.Disposable {
   private imageDecoration = vscode.window.createTextEditorDecorationType({ color: new vscode.ThemeColor('textLink.foreground'), textDecoration: 'underline' });
+  private sendDecoration = vscode.window.createTextEditorDecorationType({ color: new vscode.ThemeColor('textLink.foreground'), textDecoration: 'underline' });
   private fieldDecoration = vscode.window.createTextEditorDecorationType({ textDecoration: 'underline', rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed });
   private ownDecoration = vscode.window.createTextEditorDecorationType({ isWholeLine: true, backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'), borderWidth: '0 0 0 2px', borderStyle: 'solid', borderColor: new vscode.ThemeColor('editorGutter.addedBackground') });
   private recalledDecoration = vscode.window.createTextEditorDecorationType({
@@ -22,12 +25,15 @@ export class ChatEditorController implements vscode.Disposable {
   });
   private decorationCache = new WeakMap<vscode.TextEditor, Map<string, { signature: string; ranges: vscode.Range[] }>>();
   private following = new Map<vscode.TextEditor, boolean>();
-  private pendingMessages = new Map<string, number>();
-  private newMessagesStatus = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 9);
+  private attentionLenses = new vscode.EventEmitter<void>();
+  private attentionAnchors = new Map<string, string>();
+  private attentionLensState = '';
+  private attentionTimer?: NodeJS.Timeout;
   private scrollGuards = new Map<string, NodeJS.Timeout>();
   private snapshots = new Map<string, ViewSnapshot[]>();
   private mentionDecoration!: vscode.TextEditorDecorationType;
   private replyDecoration!: vscode.TextEditorDecorationType;
+  private extraDecorations = new Map<string, vscode.TextEditorDecorationType>();
   readonly native: NativeEditor;
   private disposables: vscode.Disposable[] = [];
   constructor(private host: EditorHost) {
@@ -37,16 +43,15 @@ export class ChatEditorController implements vscode.Disposable {
       afterHistoryChange: (doc, applied) => this.afterHistoryChange(doc, applied)
     });
     this.refreshHighlights();
-    this.newMessagesStatus.command = 'qq.latest'; this.newMessagesStatus.name = 'QQ 新消息';
-    this.disposables.push(this.native, this.imageDecoration, this.fieldDecoration, this.ownDecoration, this.recalledDecoration, this.newMessagesStatus,
+    this.disposables.push(this.native, this.imageDecoration, this.sendDecoration, this.fieldDecoration, this.ownDecoration, this.recalledDecoration, this.attentionLenses,
+      vscode.languages.registerCodeLensProvider({ scheme: 'qqchat' }, { onDidChangeCodeLenses: this.attentionLenses.event, provideCodeLenses: doc => this.provideAttentionLinks(doc) }),
       vscode.workspace.registerFileSystemProvider('qqchat', this.native, { isCaseSensitive: true }),
       vscode.workspace.onDidCloseTextDocument(doc => this.native.release(doc)),
       vscode.window.onDidChangeTextEditorVisibleRanges(({ textEditor: editor }) => {
         const uri = editor.document.uri.toString(), key = host.transcript?.key(editor.document.uri);
         if (!key || this.snapshots.has(uri) || this.scrollGuards.has(uri)) return;
         const bottom = this.atBottom(editor); this.following.set(editor, bottom);
-        if (bottom) this.pendingMessages.delete(key);
-        host.checkRead(); this.updateNewMessages();
+        host.checkRead(); this.updateUnreadStatus(); this.refreshAttention();
       }),
       vscode.window.onDidChangeVisibleTextEditors(editors => {
         for (const editor of this.following.keys()) if (!editors.includes(editor)) this.following.delete(editor);
@@ -57,7 +62,8 @@ export class ChatEditorController implements vscode.Disposable {
           this.decorate(editor);
         }
       }),
-      vscode.window.onDidChangeActiveTextEditor(() => { this.native.updateContext(); this.updateNewMessages(); }),
+      vscode.window.onDidChangeActiveTextEditor(() => { this.native.updateContext(); this.updateUnreadStatus(); this.refreshAttention(); }),
+      vscode.window.onDidChangeWindowState(() => this.refreshAttention()),
       vscode.workspace.onDidChangeTextDocument(event => {
         if (!event.contentChanges.length) return;
         for (const editor of vscode.window.visibleTextEditors.filter(editor => editor.document === event.document)) {
@@ -69,15 +75,11 @@ export class ChatEditorController implements vscode.Disposable {
   }
   isFollowing(editor: vscode.TextEditor): boolean { return this.following.get(editor) ?? this.atBottom(editor); }
   follow(editor: vscode.TextEditor, value: boolean): void { this.following.set(editor, value); }
-  incoming(key: string): void {
-    if (vscode.window.visibleTextEditors.some(e => this.host.transcript?.key(e.document.uri) === key && !this.isFollowing(e))) {
-      this.pendingMessages.set(key, (this.pendingMessages.get(key) ?? 0) + 1); this.updateNewMessages();
-    }
-  }
   reset(): void {
-    this.native.reset(); this.decorationCache = new WeakMap(); this.following.clear(); this.pendingMessages.clear(); this.snapshots.clear();
+    clearTimeout(this.attentionTimer); this.attentionAnchors.clear(); this.attentionLensState = ''; this.attentionLenses.fire();
+    this.native.reset(); this.decorationCache = new WeakMap(); this.following.clear(); this.snapshots.clear();
     for (const timer of this.scrollGuards.values()) clearTimeout(timer);
-    this.scrollGuards.clear(); this.updateNewMessages();
+    this.scrollGuards.clear(); this.updateUnreadStatus();
   }
   private atBottom(editor: vscode.TextEditor): boolean {
     return editor.visibleRanges.some(range => range.end.line >= editor.document.lineCount - 3);
@@ -85,8 +87,8 @@ export class ChatEditorController implements vscode.Disposable {
   latest(editor = vscode.window.activeTextEditor, markRead = true): void {
     const key = editor && this.host.transcript?.key(editor.document.uri);
     if (!editor || !key) return;
+    this.attentionAnchors.delete(key); this.refreshAttention();
     this.following.set(editor, true);
-    this.pendingMessages.delete(key);
     const last = editor.document.lineAt(editor.document.lineCount - 1).range.end;
     const uri = editor.document.uri.toString();
     clearTimeout(this.scrollGuards.get(uri));
@@ -101,22 +103,93 @@ export class ChatEditorController implements vscode.Disposable {
       // With no scrollable space after EOF, AtTop clamps to the actual bottom.
       editor.revealRange(new vscode.Range(last, last), vscode.TextEditorRevealType.AtTop);
     }
-    if (markRead) this.host.checkRead(); this.updateNewMessages();
+    if (markRead) this.host.checkRead(); this.updateUnreadStatus();
   }
-  private updateNewMessages(): void {
-    const editor = vscode.window.activeTextEditor, key = editor && this.host.transcript?.key(editor.document.uri);
-    const count = key ? this.pendingMessages.get(key) ?? 0 : 0;
-    if (!key || !editor || this.following.get(editor) !== false) { this.newMessagesStatus.hide(); return; }
-    this.newMessagesStatus.text = count ? `$(arrow-down) 新消息 · ${count} 条` : '$(arrow-down) 返回最新';
-    this.newMessagesStatus.tooltip = '点击回到底部并恢复自动跟随'; this.newMessagesStatus.show();
+  private updateUnreadStatus(): void {
+    this.host.refreshUnreadStatus();
+  }
+  refreshAttention(): void {
+    clearTimeout(this.attentionTimer);
+    const editor = vscode.window.activeTextEditor, store = this.host.store;
+    const key = editor && this.host.transcript?.key(editor.document.uri);
+    const target = key && store?.unseenAttention(key).at(-1);
+    const state = JSON.stringify([editor?.document.uri.toString(), target && target.id, key && this.attentionAnchors.get(key)]);
+    if (state !== this.attentionLensState) { this.attentionLensState = state; this.attentionLenses.fire(); }
+    this.updateUnreadStatus();
+    if (!editor || !key || !store || !vscode.window.state.focused) return;
+    this.attentionTimer = setTimeout(() => {
+      if (editor !== vscode.window.activeTextEditor || store !== this.host.store || !vscode.window.state.focused || !this.native.historyMatches(editor.document) || this.snapshots.has(editor.document.uri.toString())) return;
+      const rendered = this.host.transcript?.rendered.get(key); if (!rendered) return;
+      // Use visible body lines, not a partially visible date/header. Also remember
+      // ordinary replies already seen before their original is resolved.
+      const bodies = new Map(rendered.actions.filter(a => a.kind === 'reply').map(a => [a.messageId, a.line]));
+      const seen = new Set<string>();
+      for (const range of editor.visibleRanges) for (let line = range.start.line; line <= range.end.line; line++) {
+        const id = rendered.messages.get(line), body = id === undefined ? undefined : bodies.get(id);
+        if (id && body !== undefined && line >= body) seen.add(id);
+      }
+      store.markViewed(key, seen);
+    }, 180);
+  }
+  provideAttentionLinks(doc: vscode.TextDocument): vscode.CodeLens[] {
+    const key = this.host.transcript?.key(doc.uri), region = this.native.region(doc);
+    if (!key || !region || vscode.window.activeTextEditor?.document !== doc || !this.native.historyMatches(doc)) return [];
+    const target = this.host.store?.unseenAttention(key).at(-1); if (!target) return [];
+    const anchor = this.attentionAnchors.get(key), rendered = this.host.transcript?.rendered.get(key);
+    const line = rendered?.actions.find(a => a.kind === 'reply' && a.messageId === anchor)?.line ?? doc.positionAt(region.start).line - 1;
+    return [new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: '↑ 上一个 @ 或回复', command: 'qq.previousAttention', arguments: [doc.uri.toString(), target.id], tooltip: '上一个 @ 或回复' })];
+  }
+  async previousAttention(uri?: string, messageId?: string): Promise<void> {
+    const editor = vscode.window.activeTextEditor, store = this.host.store, transcript = this.host.transcript;
+    const key = editor && transcript?.key(editor.document.uri);
+    if (!editor || !key || !store || !transcript) return;
+    if (uri && editor.document.uri.toString() !== vscode.Uri.parse(uri).toString()) return;
+    if (!this.native.historyMatches(editor.document)) throw new Error('历史已在本地修改，请先重建聊天文档再定位');
+    await this.native.sync(editor, true);
+    if (store !== this.host.store || transcript !== this.host.transcript || editor !== vscode.window.activeTextEditor || !this.native.historyMatches(editor.document)) return;
+    const rendered = transcript.rendered.get(key);
+    const pending = store.unseenAttention(key);
+    const target = messageId ? pending.find(m => m.id === messageId) : pending.at(-1);
+    const start = target && rendered?.starts.get(target.id);
+    if (!target || start === undefined || !rendered) { this.refreshAttention(); return; }
+    const body = rendered.actions.find(a => a.messageId === target.id && a.kind === 'reply');
+    const position = new vscode.Position(body?.line ?? start, body?.start ?? 0);
+    this.following.set(editor, false);
+    editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+    this.attentionAnchors.set(key, target.id);
+    store.markViewed(key, new Set([target.id]));
+    this.refreshAttention();
+  }
+  async openReplyOriginal(uri: string, messageId: string): Promise<void> {
+    const editor = vscode.window.activeTextEditor, transcript = this.host.transcript, store = this.host.store;
+    if (!editor || editor.document.uri.toString() !== vscode.Uri.parse(uri).toString() || !transcript || !store) return;
+    const key = transcript.key(editor.document.uri); if (!key) return;
+    if (!this.native.historyMatches(editor.document)) throw new Error('历史已在本地修改，请先重建聊天文档再定位');
+    await this.native.sync(editor, true);
+    if (transcript !== this.host.transcript || store !== this.host.store || editor !== vscode.window.activeTextEditor || !this.native.historyMatches(editor.document)) return;
+    const rendered = transcript.rendered.get(key), start = rendered?.starts.get(messageId);
+    if (start === undefined || !rendered) throw new Error('原消息不在当前缓存中，请先加载更早记录');
+    const body = rendered.actions.find(a => a.kind === 'reply' && a.messageId === messageId);
+    const position = new vscode.Position(body?.line ?? start, body?.start ?? 0);
+    this.following.set(editor, false); editor.selection = new vscode.Selection(position, position);
+    editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
+    this.refreshAttention();
   }
   refreshHighlights(): void {
     const cfg = vscode.workspace.getConfiguration('qq');
     const color = (key: string, fallback: string) => { const value = cfg.get(key, fallback); return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback; };
     this.mentionDecoration?.dispose(); this.replyDecoration?.dispose();
+    this.ownDecoration.dispose(); this.recalledDecoration.dispose();
+    for (const decoration of this.extraDecorations.values()) decoration.dispose(); this.extraDecorations.clear();
+    this.decorationCache = new WeakMap();
     const make = (value: string) => vscode.window.createTextEditorDecorationType({ isWholeLine: true, backgroundColor: value + '22', borderColor: value, borderStyle: 'solid', borderWidth: '0 0 0 2px', overviewRulerColor: value, overviewRulerLane: vscode.OverviewRulerLane.Right });
     this.mentionDecoration = make(color('mentionColor', '#E5A030'));
     this.replyDecoration = make(color('replyColor', '#409CFF'));
+    this.ownDecoration = make(color('ownColor', reminderColors.ownColor.default));
+    const recalled = color('recalledColor', reminderColors.recalledColor.default);
+    this.recalledDecoration = vscode.window.createTextEditorDecorationType({ isWholeLine: true, color: recalled, backgroundColor: recalled + '18', borderColor: recalled, borderStyle: 'solid', borderWidth: '0 0 0 2px', rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed });
+    for (const key of ['allMentionColor', 'failedColor', 'uncertainColor', 'systemColor'] as const) this.extraDecorations.set(key, make(color(key, reminderColors[key].default)));
   }
   private setDecorations(editor: vscode.TextEditor, type: vscode.TextEditorDecorationType, ranges: vscode.Range[]): void {
     let cached = this.decorationCache.get(editor);
@@ -129,20 +202,27 @@ export class ChatEditorController implements vscode.Disposable {
     const key = this.host.transcript?.key(editor.document.uri);
     if (!key || !this.host.transcript) return;
     const reliable = this.native.historyMatches(editor.document);
-    this.setDecorations(editor, this.mentionDecoration, reliable ? (this.host.transcript.rendered.get(key)?.mentionLines ?? []).map(line => new vscode.Range(line, 0, line, 0)) : []);
+    const allMentions = new Set(reliable ? this.host.transcript.rendered.get(key)?.allMentionLines : []);
+    this.setDecorations(editor, this.mentionDecoration, reliable ? (this.host.transcript.rendered.get(key)?.mentionLines ?? []).filter(line => !allMentions.has(line)).map(line => new vscode.Range(line, 0, line, 0)) : []);
     this.setDecorations(editor, this.replyDecoration, reliable ? (this.host.transcript.rendered.get(key)?.replyLines ?? []).map(line => new vscode.Range(line, 0, line, 0)) : []);
     this.setDecorations(editor, this.ownDecoration, reliable ? (this.host.transcript.rendered.get(key)?.ownLines ?? []).map(line => new vscode.Range(line, 0, line, 0)) : []);
     const recalledLines = reliable ? this.host.transcript.rendered.get(key)?.recalledLines ?? [] : [];
     this.setDecorations(editor, this.recalledDecoration, recalledLines.map(line => editor.document.lineAt(line).range));
     const recalled = new Set(recalledLines);
     const content = reliable ? this.host.transcript.rendered.get(key) : undefined;
+    for (const [color, field] of [['allMentionColor', 'allMentionLines'], ['failedColor', 'failedLines'], ['uncertainColor', 'uncertainLines'], ['systemColor', 'systemLines']] as const) {
+      const emphasized = new Set([...(content?.mentionLines ?? []), ...(content?.replyLines ?? [])]);
+      this.setDecorations(editor, this.extraDecorations.get(color)!, (content?.[field] ?? []).filter(line => color !== 'systemColor' || !emphasized.has(line)).map(line => new vscode.Range(line, 0, line, 0)));
+    }
     this.setDecorations(editor, this.fieldDecoration, [
       ...content?.mentions.filter(span => span.kind === 'sender') ?? [],
       ...content?.actions.filter(span => span.kind === 'reply') ?? []
     ].filter(span => !recalled.has(span.line)).map(span => new vscode.Range(span.line, span.start, span.line, span.end)));
+    const draftLinks = this.native.links(editor.document);
+    this.setDecorations(editor, this.sendDecoration, draftLinks.filter(link => link.target?.path === 'qq.send').map(link => link.range));
     this.setDecorations(editor, this.imageDecoration, [
       ...(reliable ? this.host.transcript.provideDocumentLinks(editor.document).map(link => link.range) : []),
-      ...this.native.links(editor.document).map(link => link.range)
+      ...draftLinks.filter(link => link.target?.path !== 'qq.send').map(link => link.range)
     ].filter(range => !recalled.has(range.start.line)));
   }
   beforeHistoryChange(uri: vscode.Uri): void {
@@ -185,14 +265,16 @@ export class ChatEditorController implements vscode.Disposable {
     this.snapshots.delete(doc.uri.toString());
     clearTimeout(this.scrollGuards.get(uri));
     this.scrollGuards.set(uri, setTimeout(() => { this.scrollGuards.delete(uri); }, 80));
-    this.updateNewMessages();
+    this.updateUnreadStatus();
     this.documentChanged(doc);
   }
   private documentChanged(doc: vscode.TextDocument): void {
     for (const editor of vscode.window.visibleTextEditors) if (editor.document === doc) this.decorate(editor);
+    this.refreshAttention();
   }
   dispose(): void {
     this.reset(); this.mentionDecoration.dispose(); this.replyDecoration.dispose();
+    this.ownDecoration.dispose(); this.recalledDecoration.dispose(); for (const decoration of this.extraDecorations.values()) decoration.dispose();
     this.disposables.forEach(d => d.dispose());
   }
 }

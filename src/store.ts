@@ -8,7 +8,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { Attachment, Chat, Draft, Member, Message, id, inline, isPending, mergeMessages, normalizeSegments, messageText, splitKey } from './model';
 
-export type StoreChange = 'messages' | 'chat' | 'members' | 'unread' | 'favorites' | 'collapsed' | 'notification';
+export type StoreChange = 'messages' | 'chat' | 'members' | 'unread' | 'attention' | 'favorites' | 'collapsed' | 'notification';
 export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreChange]; draft: [key: string, replyChanged: boolean]; storageError: [error: Error] }> {
   readonly chats = new Map<string, Chat>();
   readonly messages = new Map<string, Message[]>();
@@ -72,7 +72,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     for (const [id, m] of this.outbox) if (m.chatKey === key) this.outbox.delete(id);
     for (const m of this.messages.get(key) ?? []) if (isPending(m)) this.outbox.set(m.id, m);
   }
-  async attachmentReferences(): Promise<Set<string>> {
+  async attachmentReferences(onMessage?: (message: Message) => void): Promise<Set<string>> {
     const refs = new Set<string>();
     const add = (items: Attachment[] = []) => { for (const a of items) if (a.file) refs.add(path.resolve(a.file)); };
     // Inspect unopened histories one at a time without retaining all chats in memory.
@@ -81,12 +81,12 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       try {
         const cached = JSON.parse(await fs.readFile(this.file(key), 'utf8'));
         if (!Array.isArray(cached)) throw new Error('聊天缓存格式异常，暂停清理附件');
-        for (const m of cached) { add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
+        for (const m of cached) { onMessage?.(m); add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
       } catch (error: any) { if (error.code !== 'ENOENT') throw error; }
     }
     // Read current references after filesystem awaits, so edits during the scan are protected.
     for (const d of this.drafts.values()) add(d.attachments); // Includes bounded undo attachments.
-    for (const messages of this.messages.values()) for (const m of messages) { add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
+    for (const messages of this.messages.values()) for (const m of messages) { onMessage?.(m); add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
     return refs;
   }
   upsert(chat: Chat): void {
@@ -148,6 +148,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
   add(message: Message, countUnread: boolean): boolean {
     const current = this.messages.get(message.chatKey) ?? [];
     if (current.some(m => m.id === message.id)) return false;
+    if (countUnread && message.senderId !== this.selfId) message.attentionUnseen = true;
     if (message.replyId && current.some(m => m.id === message.replyId && m.senderId === this.selfId)) message.replyToSelf = true;
     this.messages.set(message.chatKey, mergeMessages([], [...current, message], this.limit));
     const chat = this.chats.get(message.chatKey);
@@ -163,6 +164,16 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
   markRead(key: string): void {
     const chat = this.chats.get(key);
     if (chat && (chat.unread || chat.mentioned || chat.replied)) { chat.unread = 0; chat.mentioned = false; chat.replied = false; this.changed(key, 'unread'); }
+  }
+  unseenAttention(key: string): Message[] {
+    return (this.messages.get(key) ?? []).filter(m => m.attentionUnseen === true && !m.recalled && m.senderId !== this.selfId && (m.mentioned || m.replyToSelf));
+  }
+  markViewed(key: string, messageIds: ReadonlySet<string>): void {
+    let changed = false;
+    for (const message of this.messages.get(key) ?? []) if (message.attentionUnseen === true && messageIds.has(message.id)) {
+      message.attentionUnseen = false; changed = true;
+    }
+    if (changed) { this.dirty.add(key); this.changed(key, 'attention'); }
   }
   markReplyToSelf(key: string): void {
     const chat = this.chats.get(key);

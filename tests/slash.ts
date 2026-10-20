@@ -19,6 +19,8 @@ test('指令名全部英文、说明中文，私聊不提供群管理，完整�
   assert.equal(exactSlashCommand(' /STATUS\n', 'group')?.name, 'status');
   for (const text of ['/表情', '正文 /status', '/status 文字', '//status', '/unknown', '/status\n第二行']) assert.equal(exactSlashCommand(text, 'group'), undefined);
   assert.equal(exactSlashCommand('/mention', 'private'), undefined);
+  assert.equal(exactSlashCommand('/forward', 'group')?.local, 'qq.forwardMessage');
+  assert.equal(exactSlashCommand('/merge_forward', 'group'), undefined);
   assert.ok(validateSlashField({ key: 'n', label: '时长', kind: 'integer', min: 0, max: 2592000 }, '-1'));
   assert.ok(validateSlashField({ key: 'n', label: '时长', kind: 'integer', min: 0, max: 2592000 }, '1.5'));
   assert.equal(validateSlashField({ key: 'message_id', label: '消息', kind: 'message' }, '-123'), undefined);

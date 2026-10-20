@@ -58,8 +58,12 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     if (cached?.rendered === rendered) return cached.links;
     const links = (rendered.images ?? []).map(span => {
       const link = new vscode.DocumentLink(this.range(span), this.command(doc.uri, span));
-      link.tooltip = '打开 QQ 图片'; return link;
+      link.tooltip = '打开图片'; return link;
     });
+    for (const span of rendered.replyLinks) {
+      const target = vscode.Uri.parse(`command:qq.openReplyOriginal?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId]))}`);
+      const link = new vscode.DocumentLink(this.range(span), target); link.tooltip = '查看原消息'; links.push(link);
+    }
     for (const span of this.rendered.get(key)?.videos ?? []) {
       const target = vscode.Uri.parse(`command:qq.openVideo?${encodeURIComponent(JSON.stringify([doc.uri.toString(), span.messageId, span.videoIndex]))}`);
       const link = new vscode.DocumentLink(this.range(span), target); link.tooltip = '打开视频'; links.push(link);
@@ -77,13 +81,13 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     for (const span of this.rendered.get(key)?.mentions ?? []) {
       if (span.kind === 'sender') continue; // Native field clicks do not need delayed document-link styling.
       const link = new vscode.DocumentLink(new vscode.Range(span.line, span.start, span.line, span.end), this.mentionCommand(doc.uri, span.qq, span.name));
-      link.tooltip = '点击加入 @ 到草稿'; links.push(link);
+      link.tooltip = '提及'; links.push(link);
     }
     for (const action of this.rendered.get(key)?.actions ?? []) {
       if (action.kind === 'reply') continue;
       const target = action.kind === 'cancel' ? vscode.Uri.parse(`command:qq.cancelMessage?${encodeURIComponent(JSON.stringify([doc.uri.toString(), action.messageId]))}`) : this.retryCommand(doc.uri, action.messageId);
       const link = new vscode.DocumentLink(new vscode.Range(action.line, action.start, action.line, action.end), target);
-      link.tooltip = action.kind === 'cancel' ? '取消尚未提交的消息' : '重新发送这条消息'; links.push(link);
+      link.tooltip = action.kind === 'cancel' ? '取消发送' : '重试'; links.push(link);
     }
     const identity = (link: vscode.DocumentLink) => JSON.stringify([link.range.start.line, link.range.start.character, link.range.end.line, link.range.end.character, link.target?.toString(), link.tooltip]);
     const previous = new Map(cached?.links.map(link => [identity(link), link]));
@@ -98,6 +102,8 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const key = this.key(doc.uri), content = key && this.rendered.get(key);
     if (!content) return;
     const contains = (span: { line: number; start: number; end: number }) => span.line === pos.line && span.start <= pos.character && pos.character < span.end;
+    const reference = content.replyLinks.find(contains);
+    if (reference) return vscode.Uri.parse(`command:qq.openReplyOriginal?${encodeURIComponent(JSON.stringify([doc.uri.toString(), reference.messageId]))}`);
     const forward = content.forwards.find(contains);
     if (forward) return vscode.Uri.parse(`command:qq.openForward?${encodeURIComponent(JSON.stringify([doc.uri.toString(), forward.messageId, forward.forwardIndex]))}`);
     const mention = content.mentions.find(contains);
@@ -133,7 +139,7 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
     const mention = this.rendered.get(key)?.mentions.find(s => s.line === pos.line && pos.character >= s.start && pos.character < s.end);
     if (mention) {
       const md = new vscode.MarkdownString(); md.appendText(`@ ${mention.name} · ${mention.qq}`);
-      md.appendMarkdown(`\n\n[加入 @ 到草稿](${this.mentionCommand(doc.uri, mention.qq, mention.name).toString()})`);
+      md.appendMarkdown(`\n\n[提及](${this.mentionCommand(doc.uri, mention.qq, mention.name).toString()})`);
       md.isTrusted = { enabledCommands: ['qq.insertMention'] };
       return new vscode.Hover(md, new vscode.Range(mention.line, mention.start, mention.line, mention.end));
     }
@@ -151,13 +157,13 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       const message = this.messageAt(doc.uri, pos.line);
       if (message?.outgoing && ['failed', 'uncertain'].includes(message.sendState ?? '')) {
         const md = new vscode.MarkdownString(); md.appendText(message.sendError || '发送失败');
-        md.appendMarkdown(`\n\n[重试这条消息](${this.retryCommand(doc.uri, message.id).toString()})`);
+        md.appendMarkdown(`\n\n[重试](${this.retryCommand(doc.uri, message.id).toString()})`);
         md.isTrusted = { enabledCommands: ['qq.retryMessage'] }; return new vscode.Hover(md);
       }
-      if (message?.recalled) return new vscode.Hover('这条消息已撤回，保留本地已接收的内容。');
+      if (message?.recalled) return new vscode.Hover('消息已撤回');
       const action = this.rendered.get(key)?.actions.find(a => a.kind === 'reply' && a.line === pos.line && pos.character >= a.start && pos.character < a.end);
       if (!message || !action) return;
-      const md = new vscode.MarkdownString(`单击 msg 回复这条消息。\n\n[↩ 回复这条消息](${this.replyCommand(doc.uri, message.id).toString()})`);
+      const md = new vscode.MarkdownString(`[回复](${this.replyCommand(doc.uri, message.id).toString()})`);
       md.isTrusted = { enabledCommands: ['qq.reply'] };
       return new vscode.Hover(md, this.range(action));
     }
@@ -170,7 +176,7 @@ export class Transcript implements vscode.DocumentLinkProvider, vscode.HoverProv
       md.appendMarkdown((await imagePreviewMarkup(file, doc)) + '\n\n');
     } catch (error: any) { md.appendText(error.message); md.appendMarkdown('\n\n'); }
     const insert = vscode.Uri.parse(`command:qq.insertMessageImage?${encodeURIComponent(JSON.stringify(this.imageArgs(doc.uri, span)))}`);
-    md.appendMarkdown(`[打开大图](${this.command(doc.uri, span).toString()}) · [引用到发送栏](${insert.toString()})`);
+    md.appendMarkdown(`[打开大图](${this.command(doc.uri, span).toString()}) · [引用](${insert.toString()})`);
     return new vscode.Hover(md, this.range(span));
   }
   dispose(): void { this.linkCache.clear(); this.rendered.clear(); this.uris.clear(); }

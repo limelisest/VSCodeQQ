@@ -2,7 +2,7 @@
   "name": "limelisest-napcat-qq",
   "displayName": "OneBot QQ · Native Chat",
   "description": "在 VS Code 原生编辑器中畅聊 QQ，推荐搭配 SnowLuma 使用，亦全面兼容 NapCat、Lagrange、LLOneBot 等任意 OneBot v11 服务。",
-  "version": "0.2.21-dev1",
+  "version": "0.2.21",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
@@ -106,7 +106,7 @@
       },
       {
         "command": "qq.configure",
-        "title": "QQ: 连接设置",
+        "title": "QQ: 设置",
         "icon": "$(settings-gear)"
       },
       {
@@ -169,6 +169,14 @@
         "icon": "$(arrow-down)"
       },
       {
+        "command": "qq.previousAttention",
+        "title": "QQ: 上一个 @ 或回复"
+      },
+      {
+        "command": "qq.openReplyOriginal",
+        "title": "QQ: 查看回复原消息"
+      },
+      {
         "command": "qq.loadHistory",
         "title": "QQ: 加载更多记录",
         "icon": "$(history)"
@@ -190,7 +198,7 @@
       {
         "command": "qq.insertImage",
         "title": "QQ: 插入图片",
-        "icon": "$(file-media)"
+        "icon": "$(qq-picture)"
       },
       {
         "command": "qq.emojis",
@@ -268,11 +276,7 @@
       },
       {
         "command": "qq.forwardMessage",
-        "title": "QQ: 转发这条消息"
-      },
-      {
-        "command": "qq.mergeForward",
-        "title": "QQ: 选择消息合并转发"
+        "title": "QQ: 转发"
       },
       {
         "command": "qq.viewForward",
@@ -393,11 +397,6 @@
           "group": "qq@4"
         },
         {
-          "command": "qq.mergeForward",
-          "when": "resourceScheme == qqchat",
-          "group": "qq@4"
-        },
-        {
           "command": "qq.viewForward",
           "when": "resourceScheme == qqchat",
           "group": "qq@4"
@@ -480,6 +479,7 @@
     ],
     "configurationDefaults": {
       "[qq-chat]": {
+        "editor.codeLens": true,
         "editor.wordWrap": "on",
         "editor.minimap.enabled": false,
         "editor.lineNumbers": "on",
@@ -591,9 +591,111 @@
           "default": "#409CFF",
           "scope": "application",
           "description": "回复我 消息在编辑器中的高亮颜色（自动应用淡化背景与左侧边条）。"
+        },
+        "qq.allMentionColor": {
+          "type": "string",
+          "default": "#C586C0",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "@全体成员的强调配色。"
+        },
+        "qq.ownColor": {
+          "type": "string",
+          "default": "#389A65",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "自己发送的消息的强调配色。"
+        },
+        "qq.recalledColor": {
+          "type": "string",
+          "default": "#F14C4C",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "已撤回的强调配色。"
+        },
+        "qq.failedColor": {
+          "type": "string",
+          "default": "#F14C4C",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "发送失败的强调配色。"
+        },
+        "qq.uncertainColor": {
+          "type": "string",
+          "default": "#D7BA7D",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "发送结果未确认的强调配色。"
+        },
+        "qq.systemColor": {
+          "type": "string",
+          "default": "#9A83D7",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "系统与文件传输通知的强调配色。"
+        },
+        "qq.unreadColor": {
+          "type": "string",
+          "default": "#409CFF",
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "scope": "application",
+          "description": "普通未读的强调配色。"
+        },
+        "qq.statusBarButtons": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["emojis", "image", "file", "forward"] },
+          "uniqueItems": true,
+          "default": ["emojis", "image", "file", "forward"],
+          "scope": "application",
+          "description": "会话底栏入口。"
+        },
+        "qq.emojiOrder": {
+          "type": "string",
+          "default": "original",
+          "enum": [
+            "original",
+            "reverse"
+          ],
+          "scope": "application",
+          "description": "收藏表情默认排序；面板可按账号及后端单独记忆。"
         }
       }
-    }
+    },
+    "icons": {
+      "qq-picture": {
+        "description": "图片",
+        "default": { "fontPath": "./media/qq-icons.woff", "fontCharacter": "\\e001" }
+      }
+    },
+    "colors": [
+      {
+        "id": "qq.unreadBadge",
+        "description": "普通未读提醒颜色",
+        "defaults": {
+          "dark": "#409CFF",
+          "light": "#409CFF",
+          "highContrast": "#409CFF"
+        }
+      },
+      {
+        "id": "qq.mentionBadge",
+        "description": "提及提醒颜色",
+        "defaults": {
+          "dark": "#E5A030",
+          "light": "#E5A030",
+          "highContrast": "#E5A030"
+        }
+      },
+      {
+        "id": "qq.replyBadge",
+        "description": "回复提醒颜色",
+        "defaults": {
+          "dark": "#409CFF",
+          "light": "#409CFF",
+          "highContrast": "#409CFF"
+        }
+      }
+    ]
   },
   "dependencies": {
     "image-size": "^2.0.2",

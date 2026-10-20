@@ -19,7 +19,7 @@ export class SettingsTree implements vscode.TreeDataProvider<vscode.TreeItem>, v
     const connected = this.connected();
     const language = configuredCodeLanguage();
     return [
-      row('connection', '连接设置', 'plug', 'qq.configure', this.status),
+      row('connection', 'QQ 设置', 'plug', 'qq.configure', this.status),
       row('connect', connected ? '重新连接' : '连接 OneBot', 'debug-restart', 'qq.connect'),
       ...(connected ? [row('disconnect', '断开连接', 'debug-disconnect', 'qq.disconnect')] : []),
       row('language', '代码风格', 'code', 'qq.chooseCodeLanguage', languageLabels[language]),

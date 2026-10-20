@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import { Attachment } from './model';
 import { AttachmentFiles } from './attachments';
 import { ChatStore } from './store';
+export function selectAttachmentFiles(title: string, filters?: Record<string, string[]>): Thenable<vscode.Uri[] | undefined> {
+  return vscode.window.showOpenDialog({ defaultUri: vscode.Uri.file(os.homedir()), canSelectFiles: true, canSelectFolders: false, canSelectMany: true, title, filters });
+}
 interface Host {
   store?: ChatStore; attachments?: AttachmentFiles;
   attachToDraft(key: string, attachments: Attachment[]): Promise<void>;
@@ -11,7 +15,7 @@ export class AttachmentImporter {
   constructor(private host: Host) {}
   async selectImages(key: string): Promise<void> {
     const store = this.host.store;
-    const uris = await vscode.window.showOpenDialog({ canSelectMany: true, title: '选择要发送的图片', filters: { '图片': ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] } });
+    const uris = await selectAttachmentFiles('选择要发送的图片', { '图片': ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] });
     if (!uris?.length || store !== this.host.store) return;
     const files = this.host.attachments; if (!files) return;
     const staged: Attachment[] = [];

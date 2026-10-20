@@ -1,4 +1,6 @@
 import './historyEdits';
+import './attention';
+import './cacheManagement';
 import './messageCards';
 import './privateChatProfiles';
 import './mediaLimits';
@@ -58,6 +60,9 @@ test('八种代码风格保留原文、图片、引用和操作位置', () => {
     }
     assert.ok(view.ownLines.includes(view.starts.get(msg.id)!));
     assert.ok(view.text.includes('replay'));
+    assert.equal(view.replyLinks.length, 1);
+    assert.equal(lines[view.replyLinks[0].line].slice(view.replyLinks[0].start, view.replyLinks[0].end), 'replay');
+    assert.equal(view.replyLinks[0].messageId, '99');
     assert.ok(renderTranscript(chat, [], '123', language).text.includes('暂无消息'));
     if (language === 'dart' || language === 'kotlin') {
       assert.ok(view.text.includes('\\$name')); assert.ok(view.text.includes('\\${value}'));
@@ -85,7 +90,7 @@ test('八种风格兼容回复图片、特殊文件名、取消操作与提醒�
   for (const language of codeLanguages) {
     const view = renderTranscript(newChat('group', 1, '群'), [source, reply, queued], '123', language);
     const lines = view.text.split('\n');
-    const image = view.images.find(s => s.messageId === '10' && lines[s.line].includes('replay'))!;
+    const image = view.images.find(s => s.messageId === '10' && s.line > view.starts.get(reply.id)! && s.line < view.actions.find(a => a.messageId === reply.id && a.kind === 'reply')!.line)!;
     assert.ok(image, language); assert.equal(lines[image.line].slice(image.start, image.end), '[图片]');
     const file = view.files[0];
     const expected = codeStyle(language).escape('[文件:$报告.txt]');
@@ -579,6 +584,7 @@ test('多行消息保持真实换行与缩进对齐，首尾单对双引号且�
     assert.ok(lines.some(l => l.includes(url)), `${language}: 包含完整 URL`);
     assert.ok(lines.some(l => l.includes('    第二行')), `${language}: 换行缩进对齐`);
     for (const image of view.images) assert.equal(lines[image.line].slice(image.start, image.end), '[图片]');
+    assert.ok(!view.text.includes(url + '\\n'), `${language}: reply URLs end at real line breaks`);
     if (language === 'c') {
       const msgLines = lines.filter(line => line.includes('char msg[]') || line.includes('第二行') || line.includes('/end[图片]'));
       assert.ok(msgLines[0].includes('char msg[] = "' + url));

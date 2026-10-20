@@ -63,22 +63,23 @@ export class ForwardController implements vscode.Disposable {
     const key = this.host.transcript?.key(uri);
     return key ? this.host.store?.messages.get(key) ?? [] : this.page(uri)?.messages ?? [];
   }
-  private pickMessages<T extends vscode.QuickPickItem>(items: T[], multiple: boolean): Promise<readonly T[] | undefined> {
+  private pickMessages<T extends vscode.QuickPickItem>(items: T[]): Promise<readonly T[] | undefined> {
     return new Promise(resolve => {
       const picker = vscode.window.createQuickPick<T>();
-      picker.title = multiple ? '选择合并转发消息' : '选择要转发的消息';
-      picker.canSelectMany = multiple;
+      picker.title = '选择要转发的消息';
+      picker.placeholder = '选择消息';
+      picker.canSelectMany = true;
       picker.matchOnDescription = true;
       picker.items = items;
-      if (multiple) picker.selectedItems = items.filter(item => item.picked);
-      const accept = picker.onDidAccept(() => { resolve([...picker.selectedItems]); picker.hide(); });
+      picker.selectedItems = items.filter(item => item.picked);
+      const accept = picker.onDidAccept(() => { if (!picker.selectedItems.length) return; resolve([...picker.selectedItems]); picker.hide(); });
       const hide = picker.onDidHide(() => { resolve(undefined); accept.dispose(); hide.dispose(); picker.dispose(); });
       picker.show();
       // Keep chronological order and start at the latest message, without selecting it.
       picker.activeItems = items.slice(-1);
     });
   }
-  async forward(merged = false): Promise<void> {
+  async forward(): Promise<void> {
     return this.host.session.run('forward-send', async () => {
       const { store, chat, check } = this.context();
       const editor = vscode.window.activeTextEditor;
@@ -86,21 +87,34 @@ export class ForwardController implements vscode.Disposable {
       const candidates = store.displayMessages(chat.key).filter(m => /^-?\d+$/.test(m.id) && m.id !== '0' && !m.recalled && (!m.sendState || m.sendState === 'sent'));
       const options = candidates.map(m => ({ label: inline(messageText(m)).slice(0, 100) || '[空消息]', description: `${m.senderName} · ${m.id}`, value: m, picked: m.id === current?.id }));
       if (!options.length) { void vscode.window.showInformationMessage('当前会话没有可转发的消息'); return; }
-      const selected = merged ? await this.pickMessages(options, true)
-        : current && candidates.some(m => m.id === current.id) ? [options.find(o => o.value.id === current.id)!]
-        : await this.pickMessages(options, false);
+      const selected = await this.pickMessages(options);
       check(); if (!selected?.length) return;
       const ids = new Set(selected.map(s => s.value.id));
       const messages = candidates.filter(m => ids.has(m.id)); // Preserve transcript order, not click order.
+      const mode = await vscode.window.showQuickPick([
+        { label: '逐条转发', description: `${messages.length} 条独立消息`, merged: false },
+        { label: '合并转发', description: '合为一条聊天记录', merged: true }
+      ], { title: '选择转发方式' });
+      check(); if (!mode) return;
+      const merged = mode.merged;
       const target = await vscode.window.showQuickPick([...store.chats.values()].sort((a, b) => b.lastTime - a.lastTime || a.name.localeCompare(b.name, 'zh-CN')).map(c => ({ label: c.name, description: `${c.type === 'group' ? '群' : '好友'} ${c.id}`, value: c })), { title: '转发到哪个会话', matchOnDescription: true });
       check(); if (!target) return;
-      const confirmed = await vscode.window.showQuickPick([{ label: '取消', value: false }, { label: '确认转发', value: true, detail: messages.map(m => `${m.senderName}：${inline(messageText(m)).slice(0, 80)}`).slice(0, 3).join('；') }], { title: `${merged ? '合并转发' : '转发'} ${messages.length} 条 → ${target.value.name} (${target.value.id})` });
+      const confirmed = await vscode.window.showQuickPick([{ label: '取消', value: false }, { label: '确认转发', value: true, detail: messages.map(m => `${m.senderName}：${inline(messageText(m)).slice(0, 80)}`).slice(0, 3).join('；') }], { title: `${merged ? '合并转发' : '逐条转发'} ${messages.length} 条 → ${target.value.name} (${target.value.id})` });
       check(); if (!confirmed?.value) return;
       const latest = messages.map(m => store.messages.get(chat.key)?.find(value => value.id === m.id));
       if (latest.some(m => !m)) throw new Error('所选消息已不在当前记录中，请重新选择');
-      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在转发消息' }, () => {
+      await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: '正在转发消息' }, async () => {
         check();
-        return deliverForward(this.host, target.value, latest as Message[], merged, error => this.output.appendLine(String(error)));
+        const log = (error: unknown) => this.output.appendLine(String(error));
+        if (merged) return deliverForward(this.host, target.value, latest as Message[], true, log);
+        let completed = 0;
+        try {
+          for (const message of latest as Message[]) {
+            check(); await deliverForward(this.host, target.value, [message], false, log); completed++;
+          }
+        } catch (error) {
+          throw new Error(`逐条转发已完成 ${completed}/${messages.length} 条，后续已停止：${error instanceof Error ? error.message : String(error)}`);
+        }
       });
       check(); void vscode.window.showInformationMessage(`已转发到 ${target.value.name}`);
     });

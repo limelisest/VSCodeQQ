@@ -32,7 +32,7 @@ export async function testEmojiOpenModes(app: QQApp, backend: MockNapCat, ui: Te
   await until(async () => await panel.evaluate(`window.__qqSelections === 1`));
   assert.equal(store.draft(key).attachments.length, 1);
   assert.equal((app.emojis as any).view?.visible, true);
-  await panel.evaluate(`document.getElementById('tabRecent').click()`);
+  await panel.evaluate(`document.getElementById('tabFavorites').click(); document.querySelector('#recentFaces button')?.focus()`);
   await until(async () => await panel.evaluate(`!!document.querySelector('#recentFaces img')?.naturalWidth`));
   await panel.evaluate(`document.querySelector('#recentFaces img').closest('button').click()`);
   await until(async () => await panel.evaluate(`window.__qqSelections === 2`));

@@ -60,18 +60,21 @@ test('视频正文和回复在八种风格中保留独立链接范围，缓存�
   }
 });
 
-test('视频惰性下载和缓存复用，视频和文字混排发送真实 video 消息段', async () => {
+test('视频惰性下载和缓存复用，过期清理由统一缓存管理执行，混排发送真实 video 消息段', async () => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-video-'));
   const backend = new MockNapCat(), client = new OneBotClient(), store = new ChatStore(folder, '123456');
   await backend.start(); await client.connect(backend.url);
-  const files = new AttachmentFiles(path.join(folder, 'outgoing')), cache = new MediaCache(path.join(folder, 'media'), client);
+  const files = new AttachmentFiles(path.join(folder, 'outgoing')), cache = new MediaCache(path.join(folder, 'images'), client);
   store.upsert(newChat('group', 20002, '群'));
   try {
     const ref = { file: 'v', url: backend.imageUrl + '?video' };
-    const expired = path.join(folder, 'media', 'videos', 'expired.mp4');
+    const expired = path.join(folder, 'images', 'videos', 'expired.mp4');
     await fs.mkdir(path.dirname(expired), { recursive: true }); await fs.writeFile(expired, videoBytes);
     const old = new Date(Date.now() - 8 * 86400000); await fs.utimes(expired, old, old);
     const [a, b] = await Promise.all([cache.getVideo(ref), cache.getVideo(ref)]);
+    assert.ok((await fs.stat(expired)).isFile(), '下载不能绕过引用保护清理其他资源');
+    const { CacheManagement } = await import('../src/cacheManagement');
+    await new CacheManagement(folder, async () => new Set()).clean(7);
     await assert.rejects(fs.stat(expired), { code: 'ENOENT' });
     assert.equal(a, b); assert.deepEqual(await fs.readFile(a), videoBytes);
     assert.notEqual(await cache.getVideo({ ...ref, url: ref.url + '&another-message' }), a, '同名视频的不同资源地址不能串缓存');

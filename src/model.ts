@@ -49,6 +49,7 @@ export function normalizeSegments(segments: unknown[]): Segment[] {
 export interface Message {
   id: string; chatKey: string; senderId: string; senderName: string;
   time: number; segments: Segment[]; replyId?: string; mentioned: boolean; replyToSelf?: boolean;
+  attentionUnseen?: boolean;
   recalled?: boolean;
   senderTitle?: string; senderRole?: string;
   senderRemark?: string; senderNickname?: string;

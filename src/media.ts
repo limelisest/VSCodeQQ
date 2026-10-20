@@ -1,7 +1,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { ImageRef, VideoRef, FileRef, splitKey } from './model';
+import { ImageRef, VideoRef, FileRef, Message, splitKey } from './model';
 import { downloadFile } from './download';
 import { OneBotClient } from './onebot';
 import { imageSize } from 'image-size';
@@ -41,14 +41,21 @@ export class MediaCache {
   private active = 0;
   private waiters: (() => void)[] = [];
   constructor(readonly folder: string, private client: OneBotClient) {}
+  references(message: Message, refs: Set<string>): void {
+    const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+    for (const segment of message.segments ?? []) {
+      if (segment.type === 'image') for (const ext of ['.png', '.jpg', '.gif', '.webp', '.bmp']) refs.add(path.resolve(this.folder, hash([segment.image.file, segment.image.url]) + ext));
+      if (segment.type === 'video') for (const ext of ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv']) refs.add(path.resolve(this.folder, 'videos', 'video-' + hash([segment.video.file, segment.video.url]) + ext));
+      if (segment.type === 'file') refs.add(path.resolve(this.folder, 'files', 'file-' + hash([message.chatKey, segment.file.id, segment.file.url]) + '.attachment'));
+    }
+  }
   getFile(ref: FileRef, key: string): Promise<string> {
     const hash = 'file-' + createHash('sha256').update(JSON.stringify([key, ref.id, ref.url])).digest('hex');
     const existing = this.pending.get(hash); if (existing) return existing;
     const task = this.limited(async () => {
       const folder = path.join(this.folder, 'files'); await fs.mkdir(folder, { recursive: true });
-      await this.pruneResources(folder).catch(() => {});
       const file = path.join(folder, hash + '.attachment');
-      try { if (Date.now() - (await fs.stat(file)).mtimeMs < 7 * 86400000) return file; } catch {}
+      try { if ((await fs.stat(file)).isFile()) { await fs.utimes(file, new Date(), new Date()); return file; } } catch {}
       const receive = async (url?: string) => {
         if (!url || !/^https?:\/\//i.test(url)) throw new Error('服务端未提供可下载的文件地址');
         await downloadFile(url, file, AbortSignal.timeout(30 * 60 * 1000));
@@ -72,10 +79,9 @@ export class MediaCache {
     const existing = this.pending.get(key); if (existing) return existing;
     const task = this.limited(async () => {
       const folder = path.join(this.folder, 'videos'); await fs.mkdir(folder, { recursive: true });
-      await this.pruneResources(folder).catch(() => {});
       for (const ext of ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.flv']) {
         const file = path.join(folder, key + ext);
-        try { if (Date.now() - (await fs.stat(file)).mtimeMs < 7 * 86400000) return file; } catch {}
+        try { if ((await fs.stat(file)).isFile()) { await fs.utimes(file, new Date(), new Date()); return file; } } catch {}
       }
       const temporary = path.join(folder, key + '.download');
       const receive = async (url?: string) => {
@@ -118,7 +124,7 @@ export class MediaCache {
     await fs.mkdir(this.folder, { recursive: true });
     for (const ext of ['.png', '.jpg', '.gif', '.webp', '.bmp']) {
       const file = path.join(this.folder, key + ext);
-      try { const s = await fs.stat(file); if (Date.now() - s.mtimeMs < 7 * 86400000) return file; } catch {}
+      try { const s = await fs.stat(file); if (s.isFile()) { await fs.utimes(file, new Date(), new Date()); return file; } } catch {}
     }
     const temporary = path.join(this.folder, key + '.download');
     const receive = async (url: string) => {
@@ -129,7 +135,7 @@ export class MediaCache {
       const ext = imageExtension(header.subarray(0, count));
       if (!ext) throw new Error('响应不是受支持的图片');
       const file = path.join(this.folder, key + ext); await fs.rename(temporary, file);
-      await this.prune(file).catch(() => {}); return file;
+      return file;
     };
     try {
       let failure: unknown;
@@ -141,23 +147,5 @@ export class MediaCache {
       if (failure) throw failure;
       throw new Error('图片暂时无法获取，地址可能已过期；请稍后重试');
     } finally { await fs.unlink(temporary).catch(() => {}); }
-  }
-  private async pruneResources(folder: string): Promise<void> {
-    for (const entry of await fs.readdir(folder, { withFileTypes: true })) {
-      if (!entry.isFile()) continue;
-      const file = path.join(folder, entry.name);
-      if (Date.now() - (await fs.stat(file)).mtimeMs >= 7 * 86400000) await fs.unlink(file);
-    }
-  }
-  private async prune(keep: string): Promise<void> {
-    const files = (await Promise.all((await fs.readdir(this.folder)).map(async name => {
-      const file = path.join(this.folder, name); const stat = await fs.stat(file); return { file, size: stat.size, time: stat.mtimeMs, regular: stat.isFile() };
-    }))).filter(file => file.regular && ['.png', '.jpg', '.gif', '.webp', '.bmp'].includes(path.extname(file.file)));
-    let total = files.reduce((n, f) => n + f.size, 0);
-    for (const file of files.sort((a,b) => a.time - b.time)) {
-      if (total <= 128 * 1024 * 1024 && Date.now() - file.time < 7 * 86400000) break;
-      if (file.file === keep) continue; // A cache budget must never delete the image being opened.
-      await fs.unlink(file.file).catch(() => {}); total -= file.size;
-    }
   }
 }

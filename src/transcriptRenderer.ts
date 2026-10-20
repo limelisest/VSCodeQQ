@@ -1,11 +1,12 @@
 import { Chat, Message, inline } from './model';
 import { CodeLanguage, codeStyle } from './codeStyle';
+import { systemChatName } from './systemChats';
 
 export const TRANSCRIPT_HELP = '底部草稿 Enter 发送 · Shift/Ctrl+Enter 换行 · 点击 msg 回复 · 点击 name 提及 · 图片悬浮预览';
 
 export interface Span { line: number; start: number; end: number; messageId: string; imageIndex: number; }
 export interface MentionSpan { kind: 'sender' | 'mention'; line: number; start: number; end: number; qq: string; name: string; }
-export interface Rendered { text: string; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; videos: { line: number; start: number; end: number; messageId: string; videoIndex: number }[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; }
+export interface Rendered { text: string; replyLinks: { line: number; start: number; end: number; messageId: string }[]; forwards: { line: number; start: number; end: number; messageId: string; forwardIndex: number }[]; images: Span[]; videos: { line: number; start: number; end: number; messageId: string; videoIndex: number }[]; mentions: MentionSpan[]; files: { line: number; start: number; end: number; messageId: string; fileIndex: number }[]; actions: { line: number; start: number; end: number; messageId: string; kind: 'reply' | 'retry' | 'cancel' }[]; messages: Map<number, string>; starts: Map<string, number>; ownLines: number[]; recalledLines: number[]; attentionLines: number[]; mentionLines: number[]; replyLines: number[]; allMentionLines: number[]; failedLines: number[]; uncertainLines: number[]; systemLines: number[]; }
 // Escape only the display projection; copy/reply/send continue using the original message.
 export const codeString = (text: string): string => JSON.stringify(text).slice(1, -1)
   .replace(/[\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, c => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`);
@@ -14,7 +15,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
   const escape = (text: string) => style.escape(codeString(text));
   const quote = (text: string) => `"${escape(text)}"`;
   const lines = [style.constant('CHAT_NAME', [quote(chat.name)]), style.constant(chat.type === 'group' ? 'GROUP_ID' : 'FRIEND_ID', [quote(chat.id)]), `${style.comment} ${TRANSCRIPT_HELP}`, ''];
-  const rendered: Rendered = { text: '', forwards: [], images: [], videos: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [] };
+  const rendered: Rendered = { text: '', replyLinks: [], forwards: [], images: [], videos: [], mentions: [], files: [], actions: [], messages: new Map(), starts: new Map(), ownLines: [], recalledLines: [], attentionLines: [], mentionLines: [], replyLines: [], allMentionLines: [], failedLines: [], uncertainLines: [], systemLines: [] };
   const byId = new Map(messages.map(m => [m.id, m]));
   let lastDay = '';
   for (const m of messages) {
@@ -28,7 +29,7 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
       ? `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
       : '----/--/-- --:--:--';
     if (m.systemNotice) {
-      rendered.messages.set(lines.length, m.id);
+      rendered.messages.set(lines.length, m.id); rendered.systemLines.push(lines.length);
       lines.push(`${style.comment} ${stamp} · 文件传输：${inline(m.systemNotice)}`, '');
       continue;
     }
@@ -54,6 +55,8 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     lines.push(style.string('name') + escape(m.senderName) + style.stringEnd + remark);
     if (m.replyId) {
       let replay = style.string('replay');
+      const field = replay.indexOf('replay');
+      rendered.replyLinks.push({ line: lines.length, start: field, end: field + 6, messageId: m.replyId });
       if (target) {
         replay += escape(`${target.senderName}：`);
         let remaining = 160, replyImageIndex = 0, replyVideoIndex = 0, replyFileIndex = 0, truncated = false;
@@ -73,7 +76,11 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
             rendered.mentions.push({ kind: 'mention', line: lines.length, start: replay.length, end: replay.length + text.length, qq: part.qq, name: part.name || part.qq });
             replay += text;
           } else {
-            replay += escape(part.text.slice(0, remaining));
+            const parts = part.text.slice(0, remaining).replace(/\r\n/g, '\n').split('\n');
+            for (let index = 0; index < parts.length; index++) {
+              if (index) { lines.push(replay); replay = '    '; }
+              replay += escape(parts[index]);
+            }
             if (part.text.length > remaining && !truncated) { replay += '…'; truncated = true; }
             remaining = Math.max(0, remaining - part.text.length);
           }
@@ -135,6 +142,8 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
       }
       lines.push(prefix + label + style.stringEnd);
     }
+    if (!m.recalled && m.sendState === 'failed') rendered.failedLines.push(lines.length);
+    if (!m.recalled && m.sendState === 'uncertain') rendered.uncertainLines.push(lines.length);
     const ending = `${style.ending}${state ? `  ${style.comment} ${state}` : ''}`;
     if (ending.includes('[重试]')) rendered.actions.push({ line: lines.length, start: ending.indexOf('[重试]'), end: ending.indexOf('[重试]') + 4, messageId: m.id, kind: 'retry' });
     const cancellable = m.sendState === 'queued' || (m.sendState === 'sending' && m.sendProgress?.stage === 'upload');
@@ -142,6 +151,13 @@ export function renderTranscript(chat: Chat, messages: Message[], selfId: string
     if (cancellable) rendered.actions.push({ line: lines.length, start: footer.indexOf('[取消]'), end: footer.indexOf('[取消]') + 4, messageId: m.id, kind: 'cancel' });
     lines.push(footer + (m.recalled ? `  ${style.comment} 已撤回` : ''));
     for (let line = start; line < lines.length; line++) { rendered.messages.set(line, m.id); if (m.recalled) rendered.recalledLines.push(line); else if (self) rendered.ownLines.push(line); else if (m.mentioned || m.replyToSelf || target?.senderId === selfId) { rendered.attentionLines.push(line); (m.mentioned ? rendered.mentionLines : rendered.replyLines).push(line); } }
+    if (!m.recalled && !self) {
+      const all = m.mentioned && m.segments.some(s => s.type === 'mention' && s.qq === 'all') && !m.segments.some(s => s.type === 'mention' && s.qq === selfId);
+      for (let line = start; line < lines.length; line++) {
+        if (all) rendered.allMentionLines.push(line);
+        if (systemChatName(chat.type, chat.id)) rendered.systemLines.push(line);
+      }
+    }
     lines.push('');
   }
   if (!messages.length) lines.push(`${style.comment} 暂无消息。`);

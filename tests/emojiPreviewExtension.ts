@@ -28,7 +28,7 @@ export async function testEmojiPreviews(app: QQApp, backend: MockNapCat, ui: Tes
   assert.equal(backend.sent.length, sent);
   await vscode.commands.executeCommand('qq.emojis');
   const reopened = await ui.webview('#recentFaces');
-  await reopened.evaluate(`document.getElementById('tabRecent').click()`);
+  await reopened.evaluate(`document.getElementById('tabFavorites').click(); document.querySelector('#recentFaces button')?.focus()`);
   await until(async () => await reopened.evaluate(`document.querySelectorAll('#recentFaces img').length === 1 && [...document.querySelectorAll('#recentFaces img')].every(image => image.complete && image.naturalWidth > 0 && !image.hidden)`));
   await reopened.key('Escape', 27);
   await until(() => !(app.emojis as any).view?.visible);

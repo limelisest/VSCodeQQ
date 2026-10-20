@@ -12,7 +12,8 @@ import { transferFiles } from './transferFiles';
 import { mentionPattern } from './mentions';
 import { historyEdits } from './historyEdits';
 
-export const DRAFT_DIVIDER = '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───';
+const LEGACY_DRAFT_DIVIDER = '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───';
+export const DRAFT_DIVIDER = LEGACY_DRAFT_DIVIDER + ' [发送]';
 interface Host {
   store?: ChatStore; transcript?: Transcript; attachments?: AttachmentFiles;
   beforeHistoryChange(uri: vscode.Uri): void;
@@ -60,9 +61,10 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     this.prefixes.set(uri.toString(), prefix); return prefix;
   }
   region(doc: vscode.TextDocument): { boundary: number; start: number; text: string } | undefined {
-    const text = doc.getText(), divider = `\n${DRAFT_DIVIDER}\n`;
+    const text = doc.getText();
     const prefix = this.prefixes.get(doc.uri.toString());
-    if (prefix && text.startsWith(prefix)) return { boundary: prefix.length - divider.length, start: prefix.length, text: text.slice(prefix.length) };
+    if (prefix && text.startsWith(prefix)) return { boundary: prefix.lastIndexOf('\n', prefix.length - 2), start: prefix.length, text: text.slice(prefix.length) };
+    const divider = text.includes(`\n${DRAFT_DIVIDER}\n`) ? `\n${DRAFT_DIVIDER}\n` : `\n${LEGACY_DRAFT_DIVIDER}\n`;
     const boundary = text.indexOf(divider);
     if (boundary < 0 || text.indexOf(divider, boundary + divider.length) >= 0) return;
     const start = boundary + divider.length;
@@ -90,10 +92,10 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     // differ from the expected snapshot while its new history is already valid.
     if (expected && text.startsWith(expected.prefix)) expected.publish();
     if (internal) this.expectedEdits.delete(uri);
-    const replacesPage = !internal && !!this.region(doc) && changes.some(change => change.rangeOffset === 0 && change.text.includes(`\n${DRAFT_DIVIDER}\n`));
+    const replacesPage = !internal && !!this.region(doc) && changes.some(change => change.rangeOffset === 0 && [DRAFT_DIVIDER, LEGACY_DRAFT_DIVIDER].some(marker => change.text.includes(`\n${marker}\n`)));
     if (!internal && changes.length && (!this.historyMatches(doc) || replacesPage)) {
       const old = Buffer.from(this.buffers.get(uri) ?? []).toString('utf8');
-      const divider = `\n${DRAFT_DIVIDER}\n`, boundary = old.indexOf(divider);
+      const divider = old.includes(`\n${DRAFT_DIVIDER}\n`) ? `\n${DRAFT_DIVIDER}\n` : `\n${LEGACY_DRAFT_DIVIDER}\n`, boundary = old.indexOf(divider);
       const start = boundary < 0 ? -1 : boundary + divider.length;
       // VS Code may reapply an older complete page from its hot-exit backup.
       // That page is a projection, not a draft edit: folding its replacement
@@ -259,7 +261,6 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
             md.appendMarkdown('\n\n' + (await imagePreviewMarkup(file, doc)));
           } catch { md.appendText('\n[图片预览暂不可用]'); }
         }
-        md.appendText('\n\n删除占位符即可取消回复。');
         return new vscode.Hover(md, range);
       }
     }
@@ -270,19 +271,25 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
       md.supportHtml = true;
       md.appendMarkdown(`\n\n${await imagePreviewMarkup(file, doc)}`);
     }
-    if (item.attachment.kind === 'file') md.appendText(`\n大小：${(item.attachment.size ?? 0).toLocaleString()} 字节\nEnter 发送；删除占位符可取消附件`);
+    if (item.attachment.kind === 'file') md.appendText(`\n大小：${(item.attachment.size ?? 0).toLocaleString()} 字节`);
     return new vscode.Hover(md, item.range);
   }
   links(doc: vscode.TextDocument): vscode.DocumentLink[] {
     const region = this.region(doc); if (!region) return [];
     const result: vscode.DocumentLink[] = [];
+    const dividerLine = doc.positionAt(region.start).line - 1;
+    const send = doc.lineAt(dividerLine).text.lastIndexOf('[发送]');
+    if (send >= 0) {
+      const link = new vscode.DocumentLink(new vscode.Range(dividerLine, send, dividerLine, send + 4), vscode.Uri.parse(`command:qq.send?${encodeURIComponent(JSON.stringify([doc.uri.toString()]))}`));
+      link.tooltip = '发送'; result.push(link);
+    }
     const key = this.host.transcript?.key(doc.uri), draft = key ? this.host.store?.draft(key) : undefined;
     if (draft?.replyPlaceholder && draft.replyId) {
       const index = region.text.indexOf(draft.replyPlaceholder);
       if (index >= 0) {
         const range = new vscode.Range(doc.positionAt(region.start + index), doc.positionAt(region.start + index + draft.replyPlaceholder.length));
         const link = new vscode.DocumentLink(range, vscode.Uri.parse(`command:qq.cancelReply?${encodeURIComponent(JSON.stringify([doc.uri.toString(), draft.replyPlaceholder]))}`));
-        link.tooltip = '取消此回复，也可直接删除占位符'; result.push(link);
+        link.tooltip = '取消回复'; result.push(link);
       }
     }
     for (const match of region.text.matchAll(/\[(?:图片|视频):\d+\]/g)) {

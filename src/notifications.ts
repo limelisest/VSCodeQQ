@@ -14,6 +14,12 @@ export function allowsUnread(chat: Chat): boolean {
   return !chat.ignoreUnread && (chat.mentioned || !!chat.replied || chat.type === 'private' || chat.notification === 'notify');
 }
 
+export function countedUnread(chat: Chat): number {
+  if (chat.ignoreUnread || chat.notification === 'muted') return 0;
+  if (chat.type === 'group' && chat.notification !== 'notify') return 0;
+  return chat.unread;
+}
+
 // Conversation flags are sticky until read. They keep the tab/list highlighted,
 // but must never grant a notification exception to later unrelated messages.
 export function allowsMessageNotification(chat: Chat, mentioned: boolean, replyToSelf: boolean): boolean {

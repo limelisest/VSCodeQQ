@@ -57,7 +57,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
       collapsed: !!store?.collapsed.has(chat.key), preview: chat.preview, favorite: !!store?.favorites.has(chat.key), unread: chat.unread,
       mention: chat.mentioned, reply: chat.replied, muted: !allowsUnread(chat), tooltip: this.tree.getTreeItem(chat).tooltip
     }));
-    void this.view.webview.postMessage({ type: 'rows', account: store?.selfId ?? '', rows, active: this.activeKey ?? '', revealActive });
+    void this.view.webview.postMessage({ type: 'rows', account: store?.selfId ?? '', rows, palette: Object.fromEntries(['mentionColor', 'replyColor', 'unreadColor'].map(key => [key, vscode.workspace.getConfiguration('qq').get(key)])), active: this.activeKey ?? '', revealActive });
   }
   private html(webview: vscode.Webview): string {
     const nonce = randomBytes(16).toString('hex');
@@ -72,13 +72,13 @@ button{font:inherit;border:0;cursor:pointer;background:transparent;color:inherit
 </style></head><body data-section="list"><div class="search"><input id="search" type="text" maxlength="200" aria-label="搜索会话" placeholder="搜索名称、备注、号码" autocomplete="off"><button id="clear" title="清除搜索" aria-label="清除搜索">×</button></div><button id="collapsed" class="collapsed-entry" aria-pressed="false">收纳箱 (0)</button><div id="count" role="status"></div><div id="empty"></div><div id="results" role="listbox" aria-label="会话列表"></div>
 <script nonce="${nonce}">
 const vscode=acquireVsCodeApi(), input=document.getElementById('search'), results=document.getElementById('results');
-let rows=[],account='',selected='',active='',composing=false,touched=false,collapsed=!!vscode.getState()?.collapsed;
+let palette={},rows=[],account='',selected='',active='',composing=false,touched=false,collapsed=!!vscode.getState()?.collapsed;
 function save(){vscode.setState({query:input.value,collapsed});}
 input.value=vscode.getState()?.query||'';
 function send(type,key){vscode.postMessage({type,key,account});}
 function icon(name){const node=document.createElement('span');node.className='codicon codicon-'+name;node.setAttribute('aria-hidden','true');node.textContent=String.fromCodePoint({account:0xeb99,organization:0xea7e,mail:0xeb1c,'star-full':0xeb59,'star-empty':0xea6a,archive:0xea98,discard:0xeae2}[name]);return node;}
 function boxIcon(){return icon('archive');}
-function unreadBadge(unread,muted,prefix=''){const count=document.createElement('span');count.className='count'+(muted?' muted':'');count.textContent=prefix+(unread>99?'99+':unread);count.title=unread+' 条未读'+(muted?' · 不提醒':'');return count;}
+function unreadBadge(unread,muted,prefix=''){const count=document.createElement('span');count.className='count'+(muted?' muted':'');count.textContent=prefix+(unread>99?'99+':unread);if(!muted){const color=palette[prefix.startsWith('@')?'mentionColor':prefix.startsWith('↩')?'replyColor':'unreadColor'];if(/^#[0-9a-f]{6}$/i.test(color)){count.style.backgroundColor=color;const rgb=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16));count.style.color=(rgb[0]*299+rgb[1]*587+rgb[2]*114)/1000>150?'#111827':'#ffffff';}}count.title=unread+' 条未读'+(muted?' · 不提醒':'');return count;}
 function render(){
  const focused=results.contains(document.activeElement),scroll=results.scrollTop,terms=input.value.trim().toLocaleLowerCase().split(/\\s+/).filter(Boolean);
  const visible=rows.filter(row=>terms.every(term=>row.search.includes(term))&&(terms.length>0||row.collapsed===collapsed));
@@ -117,7 +117,7 @@ document.addEventListener('keydown',event=>{
  if(event.key==='ArrowDown'||event.key==='ArrowUp'){event.preventDefault();index=document.activeElement===input?(event.key==='ArrowDown'?0:items.length-1):Math.max(0,Math.min(items.length-1,index+(event.key==='ArrowDown'?1:-1)));const row=items[index];if(row){selected=row.dataset.key;render();[...results.children][index].focus();}return;}
  if(event.key==='Enter'&&selected&&document.activeElement.tagName!=='BUTTON'){event.preventDefault();openChat(selected);}
 });
-window.addEventListener('message',({data})=>{if(data.type==='rows'){const changed=active!==data.active||account!==data.account;rows=data.rows;account=data.account;active=data.active||'';if(changed&&active)selected=active;render();if(changed||data.revealActive)revealActive()}else if(data.type==='active'){if(data.account!==account)return;active=data.key;if(active)selected=active;render();revealActive()}else if(data.type==='filter'||(data.type==='initialFilter'&&!touched)){input.value=data.query;save();render()}else if(data.type==='focus'){input.focus();input.select();vscode.postMessage({type:'focused'})}});
+window.addEventListener('message',({data})=>{if(data.type==='rows'){const changed=active!==data.active||account!==data.account;rows=data.rows;palette=data.palette||{};account=data.account;active=data.active||'';if(changed&&active)selected=active;render();if(changed||data.revealActive)revealActive()}else if(data.type==='active'){if(data.account!==account)return;active=data.key;if(active)selected=active;render();revealActive()}else if(data.type==='filter'||(data.type==='initialFilter'&&!touched)){input.value=data.query;save();render()}else if(data.type==='focus'){input.focus();input.select();vscode.postMessage({type:'focused'})}});
 vscode.postMessage({type:'ready'});
 </script></body></html>`;
   }

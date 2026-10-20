@@ -9,6 +9,9 @@ import { TestUI } from './ui';
 import { testForwardCommands } from './forwardExtension';
 import { testFileNotices } from './fileNoticeExtension';
 import { testSystemChat } from './systemChatExtension';
+import { testSettings } from './settingsExtension';
+import { testEmojiOrder } from './emojiOrderExtension';
+import { testAttention } from './attentionExtension';
 import { testOperationLocks } from './operationExtension';
 import { testResources } from './resourceExtension';
 import { testDraftRestore } from './draftRestoreExtension';
@@ -20,7 +23,7 @@ import { testEmojiPreviews } from './emojiPreviewExtension';
 import { testEmojiOpenModes } from './emojiModeExtension';
 import { testReplyPlaceholder } from './replyExtension';
 import { newChat } from '../src/model';
-import { allowsUnread } from '../src/notifications';
+import { allowsUnread, countedUnread } from '../src/notifications';
 const completionLabel = (item: vscode.CompletionItem) => typeof item.label === 'string' ? item.label : item.label.label;
 
 export async function run(): Promise<void> {
@@ -54,15 +57,34 @@ export async function run(): Promise<void> {
     assert.ok(probeResult.message.includes('123456'));
     assert.equal(app.client.connected, false);
     await app.settings.handle({ action: 'save', ...form, token: '', clearToken: true });
+    await until(async () => await app!.config.token() === '');
     assert.equal(await app.config.token(), '');
     let settingsReady = false;
     const handleSettings = app.settings.handle.bind(app.settings);
     app.settings.handle = async data => { const result = await handleSettings(data); if (data?.action === 'ready') settingsReady = true; return result; };
     await vscode.commands.executeCommand('qq.configure');
-    await until(() => vscode.window.tabGroups.all.some(g => g.tabs.some(t => t.label === 'QQ · 连接设置')));
+    await until(() => vscode.window.tabGroups.all.some(g => g.tabs.some(t => t.label === 'QQ · 设置')));
     await until(() => settingsReady);
     checks.push('连接设置页面入口、输入校验、Token 保留/清除/不回传、独立测试连接');
     await app.settings.handle({ action: 'connect', ...form, token: '', clearToken: true }); assert.equal(app.ready, true); checks.push('设置页保存并连接、NapCat 握手与会话列表');
+    if (process.env.QQ_TEST_ATTENTION_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testAttention(app, backend, ui, checks);
+      console.log(`QQ attention integration: ${checks.length} checks passed`); return;
+    }
+    if (process.env.QQ_TEST_EMOJI_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await testEmojiPreviews(app, backend, ui, checks);
+      await testEmojiOpenModes(app, backend, ui, checks);
+      await testEmojiOrder(app, backend, ui, checks);
+      console.log(`QQ emoji integration: ${checks.length} checks passed`); return;
+    }
+    if (process.env.QQ_TEST_SETTINGS_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await testSettings(app, backend, ui, checks);
+      console.log(`QQ settings integration: ${checks.length} checks passed`); return;
+    }
     if (process.env.QQ_TEST_SYSTEM_ONLY === '1') {
       ui = await TestUI.connect();
       await ui.call('Page.bringToFront');
@@ -188,7 +210,7 @@ export async function run(): Promise<void> {
     const settingsScreenshot = await ui.call('Page.captureScreenshot', { format: 'png' });
     await fs.writeFile(path.join(extension.extensionPath, '.test-output', 'settings.png'), Buffer.from(settingsScreenshot.data, 'base64'));
     await vscode.commands.executeCommand('workbench.action.closeSidebar');
-    const settingsTab = vscode.window.tabGroups.all.flatMap(g => g.tabs).find(t => t.label === 'QQ · 连接设置');
+    const settingsTab = vscode.window.tabGroups.all.flatMap(g => g.tabs).find(t => t.label === 'QQ · 设置');
     if (settingsTab) await vscode.window.tabGroups.close(settingsTab);
     ui.close(); ui = undefined;
     await app.notifications!.refresh();
@@ -538,14 +560,15 @@ export async function run(): Promise<void> {
     await until(() => editor.visibleRanges[0].start.line <= 21);
     await new Promise(r => setTimeout(r, 150));
     const top = editor.visibleRanges[0].start.line;
+    const unreadBeforeScrollMessage = [...app.store!.chats.values()].reduce((sum, chat) => sum + countedUnread(chat), 0);
     backend.emit({ ...backend.message(8750, '上翻时收到消息'), group_id: 20002 });
     await until(() => editor.document.getText().includes('上翻时收到消息'));
     await new Promise(r => setTimeout(r, 150));
     assert.ok(Math.abs(editor.visibleRanges[0].start.line - top) <= 1, `上翻后应保持阅读位置：${top} -> ${editor.visibleRanges[0].start.line}; following=${app!.editor.isFollowing(editor)}`);
-    await ui.waitFor("document.body.innerText.includes('新消息 · 1 条')");
+    await ui.waitFor(`document.querySelector('[id$="qq.unread"]')?.textContent.trim() === '${unreadBeforeScrollMessage + 1}'`);
     await vscode.commands.executeCommand('qq.latest');
     await until(() => editor.visibleRanges.some(r => r.end.line >= editor.document.lineCount - 3));
-    checks.push('自动置底、保留草稿选区、上翻暂停、显示新消息计数、返回最新恢复跟随');
+    checks.push('自动置底、保留草稿选区、上翻暂停、全局未读数量增加、返回最新恢复跟随');
     // Exercise an existing window/profile that still allows scrolling beyond EOF.
     await vscode.workspace.getConfiguration('editor', editor.document).update('scrollBeyondLastLine', true, vscode.ConfigurationTarget.Global, true);
     const originalLimit = app.store!.limit;
@@ -715,7 +738,7 @@ export async function run(): Promise<void> {
     const secondImage = app.transcript!.rendered.get('group:20002')!.images.find(s => s.messageId === '77801' && s.imageIndex === 1)!;
     const imageHover = await app.transcript!.provideHover(editor.document, new vscode.Position(secondImage.line, secondImage.start + 1), new vscode.CancellationTokenSource().token);
     const actions = imageHover!.contents.map(c => typeof c === 'string' ? c : 'value' in c ? c.value : '').join('');
-    assert.ok(actions.includes('引用到发送栏') && actions.includes('command:qq.insertMessageImage'));
+    assert.ok(actions.includes('[引用](command:qq.insertMessageImage'));
     const beforeReuse = backend.sent.length;
     await vscode.commands.executeCommand('qq.insertMessageImage', editor.document.uri.toString(), '77801', 1);
     assert.match(app.native.draft(editor.document).replace(app.store!.draft('group:20002').replyPlaceholder!, ''), /^前\[图片:\d+\]后$/);
@@ -729,7 +752,7 @@ export async function run(): Promise<void> {
     assert.ok(editor.document.lineAt(firstImage.line).text.includes('char replay[]'));
     await new Promise(r => setTimeout(r, 300));
     const replyHover = await vscode.commands.executeCommand<vscode.Hover[]>('vscode.executeHoverProvider', editor.document.uri, new vscode.Position(firstImage.line, firstImage.start + 1));
-    assert.ok(replyHover?.some(h => h.contents.some(c => typeof c === 'string' ? c.includes('引用到发送栏') : 'value' in c && c.value.includes('引用到发送栏'))));
+    assert.ok(replyHover?.some(h => h.contents.some(c => typeof c === 'string' ? c.includes('[引用](command:qq.insertMessageImage') : 'value' in c && c.value.includes('[引用](command:qq.insertMessageImage'))));
 
     editor.selection = new vscode.Selection(firstImage.line, firstImage.start + 1, firstImage.line, firstImage.start + 1);
     await vscode.commands.executeCommand('qq.insertMessageImage');
@@ -834,9 +857,15 @@ export async function run(): Promise<void> {
     }
     for (const name of ['recall', 'like', 'poke', 'ban', 'requests', 'group_files', 'notices', 'help']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
     const sendsBeforePicker = backend.sent.length;
+    await editor.edit(edit => edit.insert(end, 'emoji'));
+    await until(() => app!.native.draft(editor.document) === '/emoji' && !app!.native.isUpdating(editor.document));
+    const emojiEnd = editor.document.positionAt(editor.document.getText().length);
+    editor.selection = new vscode.Selection(emojiEnd, emojiEnd);
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await ui.waitFor("!!document.activeElement?.closest('.monaco-editor')");
     await vscode.commands.executeCommand('editor.action.triggerSuggest');
     await ui.waitFor(`!!document.querySelector('.suggest-widget.visible')`);
-    await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('表情')`);
+    await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/emoji')`);
     await new Promise(r => setTimeout(r, 200));
     const slashShot = await ui.call('Page.captureScreenshot', { format: 'png' });
     await fs.writeFile(path.join(output, 'slash-commands.png'), Buffer.from(slashShot.data, 'base64'));
@@ -845,9 +874,9 @@ export async function run(): Promise<void> {
     const emojiUI = await ui.webview();
     for (let i = 0; i < 80 && !await emojiUI.evaluate(`document.querySelectorAll('#favoriteFaces img').length === 2 && [...document.querySelectorAll('#favoriteFaces img')].every(i => i.complete && i.naturalWidth > 0 && !i.hidden)`); i++) await new Promise(r => setTimeout(r, 100));
     assert.equal(await emojiUI.evaluate(`document.querySelectorAll('#favoriteFaces img').length === 2 && [...document.querySelectorAll('#favoriteFaces img')].every(i => i.complete && i.naturalWidth > 0 && !i.hidden)`), true, '收藏表情必须实际解码显示');
-    assert.equal(await emojiUI.evaluate(`document.activeElement === document.querySelector('#favoriteFaces button')`), true);
+    assert.equal(await emojiUI.evaluate(`document.activeElement === document.querySelector('#recentFaces button, #favoriteFaces button')`), true);
     await emojiUI.key('ArrowRight', 39);
-    assert.equal(await emojiUI.evaluate(`document.activeElement === document.querySelectorAll('#favoriteFaces button')[1]`), true);
+    assert.equal(await emojiUI.evaluate(`document.activeElement === document.querySelectorAll('#recentFaces button, #favoriteFaces button')[1]`), true);
     await emojiUI.key('Enter', 13);
     await until(() => app!.native.draft(editor.document).includes('[图片:'));
     assert.equal(backend.sent.length, sendsBeforePicker, '选择表情不得发送 QQ 消息');
@@ -856,8 +885,8 @@ export async function run(): Promise<void> {
     await vscode.commands.executeCommand('qq.emojis');
     await new Promise(r => setTimeout(r, 300));
     const reopened = await ui.webview();
-    assert.equal(await reopened.evaluate(`!document.getElementById('favoriteFaces').hidden && document.getElementById('recentFaces').hidden && !document.getElementById('send') && !document.getElementById('input')`), true);
-    await reopened.evaluate(`document.getElementById('tabRecent').click()`);
+    assert.equal(await reopened.evaluate(`!document.getElementById('stickerList').hidden && !document.getElementById('favoriteFaces').hidden && !document.getElementById('recentFaces').hidden && document.getElementById('recentFaces').closest('#stickerList') === document.getElementById('favoriteFaces').closest('#stickerList') && !document.getElementById('send') && !document.getElementById('input')`), true);
+    await reopened.evaluate(`document.getElementById('tabFavorites').click(); document.querySelector('#recentFaces button')?.focus()`);
     for (let i = 0; i < 60 && !await reopened.evaluate(`!!document.querySelector('#recentFaces img')?.naturalWidth`); i++) await new Promise(r => setTimeout(r, 100));
     assert.equal(await reopened.evaluate(`!!document.querySelector('#recentFaces img')?.naturalWidth`), true);
     assert.ok(await reopened.evaluate(`document.querySelectorAll('#recentFaces button').length <= 10 && !!document.querySelector('#recentFaces button:first-child img')`));
@@ -869,7 +898,7 @@ export async function run(): Promise<void> {
     await until(() => vscode.window.activeTextEditor === editor);
     await until(() => !(app!.emojis as any).view?.visible);
     assert.equal(app.native.draft(editor.document), beforeCancel);
-    checks.push('精简表情面板、收藏默认页、最近使用缓存解码与排序、选择和取消自动关闭');
+    checks.push('精简表情面板、最近与收藏同列、最近使用缓存解码与排序、取消自动关闭');
     checks.push('原生 / 指令补全、Enter 仅打开选择器、收藏图真实解码、方向键选择、Enter 插入与 Esc 返回');
     // Additional reliability checks run in the isolated mock profile.
     app.store!.setDraft('group:20002', '', undefined, []); await app.native.sync(editor, true);

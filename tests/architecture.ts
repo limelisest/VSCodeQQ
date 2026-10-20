@@ -11,7 +11,7 @@ import { OneBotClient } from '../src/onebot';
 import { newChat, parseMessage, messageText } from '../src/model';
 import { MockNapCat, until } from './fixture';
 import { HistoryQueue } from '../src/historyQueue';
-import { allowsMessageNotification, allowsUnread } from '../src/notifications';
+import { allowsMessageNotification, allowsUnread, countedUnread } from '../src/notifications';
 
 test('历史队列为当前会话保留名额，重复请求复用，打开会话提升排队优先级', async () => {
   const queue = new HistoryQueue(), started: string[] = [], release = new Map<string, () => void>();
@@ -117,6 +117,8 @@ test('运行时设置定义与扩展注册一致，全部校验通过后才生�
   }
   assert.throws(() => validateChatSettings({ historyCount: 50, cacheRetentionDays: 0 }));
   assert.throws(() => validateChatSettings({ codeLanguage: 'invalid' }));
+  for (const value of ['emojis', ['invalid'], ['emojis', 'emojis'], [1]]) assert.throws(() => validateChatSettings({ statusBarButtons: value }));
+  assert.deepEqual(validateChatSettings({ statusBarButtons: [] }), [['statusBarButtons', []]]);
   assert.deepEqual(validateChatSettings({ cacheRetentionDays: 7, replyColor: '#123456' }), [['cacheRetentionDays', 7], ['replyColor', '#123456']]);
 });
 
@@ -130,6 +132,17 @@ test('免打扰例外只属于当前消息，未读会话的 @/回复标记不�
   assert.equal(allowsMessageNotification({ ...chat, notification: 'unknown' }, false, false), false);
   assert.equal(allowsMessageNotification({ ...chat, ignoreUnread: true }, true, true), false);
   assert.equal(allowsMessageNotification({ ...chat, notification: 'notify' }, false, false), true);
+});
+
+test('底栏计数不因提及或回复而计入整群免打扰未读，不提醒私聊及未知群也不计入', () => {
+  const quiet = { ...newChat('group', 1, '免打扰'), notification: 'muted' as const, unread: 13418, mentioned: true, replied: true };
+  const notifying = { ...newChat('group', 2, '提醒'), notification: 'notify' as const, unread: 3 };
+  const friend = { ...newChat('private', 3, '好友'), unread: 2 };
+  assert.equal([quiet, notifying, friend].reduce((sum, chat) => sum + countedUnread(chat), 0), 5);
+  assert.equal(countedUnread({ ...quiet, notification: 'unknown' }), 0);
+  assert.equal(countedUnread({ ...notifying, ignoreUnread: true }), 0);
+  assert.equal(countedUnread({ ...friend, notification: 'muted', mentioned: true }), 0);
+  assert.equal(countedUnread({ ...friend, ignoreUnread: true }), 0);
 });
 
 
