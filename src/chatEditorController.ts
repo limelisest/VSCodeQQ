@@ -136,7 +136,7 @@ export class ChatEditorController implements vscode.Disposable {
     if (!key || !region || vscode.window.activeTextEditor?.document !== doc || !this.native.historyMatches(doc)) return [];
     const target = this.host.store?.unseenAttention(key).at(-1); if (!target) return [];
     const anchor = this.attentionAnchors.get(key), rendered = this.host.transcript?.rendered.get(key);
-    const line = rendered?.actions.find(a => a.kind === 'reply' && a.messageId === anchor)?.line ?? doc.positionAt(region.start).line - 1;
+    const line = (anchor ? rendered?.starts.get(anchor) : undefined) ?? doc.positionAt(region.start).line - 1;
     return [new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: '↑ 上一个 @ 或回复', command: 'qq.previousAttention', arguments: [doc.uri.toString(), target.id], tooltip: '上一个 @ 或回复' })];
   }
   async previousAttention(uri?: string, messageId?: string): Promise<void> {

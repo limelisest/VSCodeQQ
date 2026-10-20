@@ -81,12 +81,14 @@ export async function testOperationLocks(app: QQApp, backend: MockNapCat, ui: Te
   await app.openChat(key);
   const invocation = app.slash.capture(vscode.window.activeTextEditor!.document.uri)!;
   const beforeBan = calls('set_group_whole_ban');
+  backend.memberRoles.set('123456', 'admin');
   const first = app.slash.run('ban_all', invocation), second = app.slash.run('ban_all', invocation);
   await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('确认操作')`);
   await ui.call('Input.insertText', { text: '确认' });
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
   await ui.enter(); await Promise.all([first, second]);
   assert.equal(calls('set_group_whole_ban') - beforeBan, 1);
+  backend.memberRoles.delete('123456');
   checks.push('重复群管理指令共享一次确认和一次云端请求');
 
   backend.actionDelays.set('fetch_custom_face', 100);

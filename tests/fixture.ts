@@ -32,6 +32,12 @@ export class MockNapCat {
   sentMessages = new Map<number, any>();
   loginFailures = 0;
   memberFailures = 0;
+  memberRoles = new Map<string, string>();
+  groupMembers?: Record<string, unknown>[];
+  members(groupId: string): Record<string, unknown>[] {
+    return (this.groupMembers ?? [{ user_id: 10001, card: '群名片', nickname: '张三', role: 'admin', title: '调试员' }, { user_id: 123456, card: '我的名片', role: 'member' }])
+      .map(member => ({ ...member, group_id: groupId, role: this.memberRoles.get(`${groupId}:${member.user_id}`) ?? this.memberRoles.get(String(member.user_id)) ?? member.role }));
+  }
   historyExtra: any[] = [];
   sendDelay = 0;
   detailDelay = 0;
@@ -98,7 +104,8 @@ export class MockNapCat {
         case 'get_friend_list': if (this.listDelay) await new Promise(r => setTimeout(r, this.listDelay)); this.listResponses++; respond([{ user_id: 10001, nickname: '张三', remark: '测试好友' }]); break;
         case 'get_group_list': if (this.listDelay) await new Promise(r => setTimeout(r, this.listDelay)); this.listResponses++; respond([{ group_id: 20001, group_name: '原生界面验证群' }, { group_id: 20002, group_name: '另一个会话' }]); break;
         case 'get_group_detail_info': respond({ cmdUinMsgMask: this.masks.get(String(req.params.group_id)) }); break;
-        case 'get_group_member_list': if (this.memberFailures-- > 0) { respond(null, 'failed'); break; } respond([{ user_id: 10001, card: '群名片', nickname: '张三', role: 'admin', title: '调试员' }, { user_id: 123456, card: '我的名片', role: 'member' }]); break;
+        case 'get_group_member_list': if (this.memberFailures-- > 0) { respond(null, 'failed'); break; } respond(this.members(String(req.params.group_id))); break;
+        case 'get_group_member_info': respond(this.members(String(req.params.group_id)).find(member => String(member.user_id) === String(req.params.user_id)) ?? null); break;
         case 'get_group_msg_history': case 'get_friend_msg_history': {
           const chat = String(req.params.group_id ?? req.params.user_id);
           const delay = this.historyDelays.get(chat) ?? this.historyDelay;

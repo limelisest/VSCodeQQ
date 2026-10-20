@@ -21,7 +21,7 @@
   - 输入 `!` 或 `！` 快速呼出表情面板（收藏表情、最近使用、QQ 原生表情）。
 - **📁 丝滑的文件传输**：拖拽或使用 `/file` 插入附件，发送时实时显示上传进度与速度；点击收到的文件链接即可一键另存到本地。
 - **⚙️ 现代卡片式设置面板**：重新设计的直观卡片式设置页面，提供动态色彩预览、连接测试状态徽标、消息通知范围及附件缓存一键清理。
-- **⚡ 斜杠指令 (`/`)**：常用聊天操作直接显示中文说明，Tab 补齐、Enter 执行，群管理使用 `/manage 子命令 参数`。
+- **⚡ 斜杠指令 (`/`)**：常用聊天操作直接显示中文说明，Tab 补齐、Enter 执行，个人资料、群资料、成员管理和会话分别使用分类子命令。
 
 ---
 
@@ -83,12 +83,15 @@
 
 - **快捷入口**：`/emoji`（表情面板）、`/image`（插入图片）、`/file`（发送文件）、`/mention`（提及成员）
 - **消息操作**：`/reply`（回复）、`/cancel_reply`（取消回复）、`/recall`（撤回）、`/forward`（逐条或合并转发）
-- **聊天导航**：`/history`（更早记录）、`/latest`（最新消息）、`/search`（搜索会话）
-- **群管理**：群聊中输入 `/manage ban @成员 60`，逐级补全子命令和成员；禁言秒数省略时为 1800。
+- **会话操作**：`/chat history`、`/chat latest`、`/chat search`、`/chat favorite`、`/chat mute`
+- **个人资料**：`/profile info` 查看本人账号，`/profile nickname 新昵称`、`/profile signature 新签名` 修改资料
+- **群资料**：`/group name 新群名`、`/group card @成员 新名片`、`/group title @成员 新头衔`、`/group remark 新备注`
+- **群内容**：`/group notice list`、`/group notice publish 公告内容`、`/group files browse`、`/group essence list`
+- **成员管理**：`/manage ban @成员 60`、`/manage unban @成员`、`/manage kick @成员`、`/manage admin @成员`；禁言秒数省略时为 1800
 - **帮助**：`/help` 打开同一组常用入口。
 
 > [!NOTE]
-> 如果整段草稿只包含一条指令（如 `/emoji`），直接按 `Enter` 即可执行。
+> 参数支持引号；允许清空的字段显式填写 `""`，例如 `/profile signature ""` 清空签名。
 
 ### 多语言代码风格
 

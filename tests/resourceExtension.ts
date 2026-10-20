@@ -23,6 +23,7 @@ export async function testResources(app: QQApp, backend: MockNapCat, ui: TestUI,
   };
   try {
     await app.openChat(source);
+    await app.loadHistory(source);
     app.store!.setDraft(source, '', undefined, []);
     app.store!.add(parseMessage({ message_id: 99100, user_id: 10001, message: [
       { type: 'image', data: { file: 'first-image', url: backend.imageUrl + '?tall' } },
@@ -44,16 +45,25 @@ export async function testResources(app: QQApp, backend: MockNapCat, ui: TestUI,
     assert.equal(backend.sent.length, sendsBefore, '复制和粘贴不能发送消息');
     checks.push('历史 [图片] 跨会话复制携带对应资源，重新生成占位符且仍可预览');
 
-    // Verify the registered VS Code copy/paste hooks, not only direct provider calls.
+    // Use Ctrl+C to exercise the native copy event. Programmatic CopyAction can
+    // take VS Code's text-only fallback without invoking prepareDocumentPaste.
     await app.openChat(source); editor = vscode.window.activeTextEditor!; await app.native.sync(editor);
-    editor.selection = new vscode.Selection(range.start, range.end);
-    await vscode.commands.executeCommand('editor.action.clipboardCopyAction');
+    await until(() => !app.native.isUpdating(editor.document) && !app.native.isImporting(editor.document));
+    const copyImage = app.transcript!.rendered.get(source)!.images.find(s => s.messageId === '99100' && s.imageIndex === 1)!;
+    editor.selection = new vscode.Selection(copyImage.line, copyImage.start, copyImage.line, copyImage.end);
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await ui.waitFor(`document.activeElement?.classList.contains('inputarea')`);
+    await ui.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'c', code: 'KeyC', windowsVirtualKeyCode: 67, modifiers: 2 });
+    await ui.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'c', code: 'KeyC', windowsVirtualKeyCode: 67, modifiers: 2 });
+    await until(async () => await vscode.env.clipboard.readText() === '[图片]');
     app.store!.setDraft(target, '', undefined, []); await app.openChat(target);
     editor = vscode.window.activeTextEditor!; await app.native.focus(editor);
+    await until(() => !app.native.isUpdating(editor.document) && !app.native.isImporting(editor.document));
     await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
     await until(() => app.store!.draft(target).attachments.some(a => a.kind === 'image') && /\[图片:\d+\]/.test(app.native.draft(editor.document)));
     checks.push('VS Code 原生复制粘贴命令使用资源元数据，不插入裸 [图片]');
     const original = app.store!.draft(target).attachments.at(-1)!;
+    assert.deepEqual(await app.attachments!.read(original), widePng);
     const collisionEditor = await paste(target, copied);
     const activeImages = app.store!.draft(target).attachments.filter(a => app.store!.draft(target).text.includes(a.placeholder!));
     assert.equal(activeImages.length, 2); assert.notEqual(activeImages[0].placeholder, activeImages[1].placeholder);

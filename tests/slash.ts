@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { availableSlashCommands, menuSlashCommands, exactSlashCommand, executeSlashApi, slashCommands, SlashIO, validateSlashField } from '../src/slashCatalog';
-import { commandWords, manageCompletion, parseManageLine } from '../src/manageLine';
+import { commandWords, commandLineCompletion, commandGroup, parseCommandLine } from '../src/commandLine';
+import { commandGroups } from '../src/slashCatalog';
 import { RequestInbox } from '../src/requestInbox';
 import { AccountSession } from '../src/accountSession';
 import { OneBotClient } from '../src/onebot';
@@ -18,7 +19,7 @@ test('指令名全部英文、说明中文，私聊不提供群管理，完整�
   assert.equal(availableSlashCommands('private').some(c => c.name === 'ban'), false);
   assert.equal(availableSlashCommands('group').some(c => c.name === 'ban'), true);
   assert.equal(menuSlashCommands('group').length, 13);
-  assert.equal(menuSlashCommands('private').length, 11);
+  assert.equal(menuSlashCommands('private').length, 10);
   assert.ok(menuSlashCommands('group').some(c => c.name === 'manage'));
   assert.ok(!menuSlashCommands('private').some(c => c.name === 'manage'));
   assert.ok(!menuSlashCommands('group').some(c => c.sensitive || ['ban', 'status', 'restart', 'backend_cache'].includes(c.name)));
@@ -97,18 +98,53 @@ test('申请按账号隔离和去重，验证群邀请类型，容量有界且�
 
 test('群管理按主命令、子命令和参数解析，绑定成员并验证默认值、引号与重名', () => {
   const members = [{ id: '10001', name: '群成员', nickname: '昵称' }, { id: '10002', name: '重名' }, { id: '10003', name: '重名' }];
-  const parse = (text: string) => parseManageLine(text, { '[@:含 空格]': '10001' }, members);
+  const parse = (text: string) => parseCommandLine(text, 'group', { '[@:含 空格]': '10001' }, members);
   assert.deepEqual(parse('/manage ban @群成员').values, { user_id: '10001', duration: '1800' });
   assert.deepEqual(parse('/manage ban [@:含 空格] 60').values, { user_id: '10001', duration: '60' });
   assert.deepEqual(parse('/manage unban @[10001]').values, { user_id: '10001' });
   assert.deepEqual(parse('/MANAGE ban 10001 0').values, { user_id: '10001', duration: '0' });
-  assert.deepEqual(parse('/manage card @昵称 "新 名片"').values, { user_id: '10001', card: '新 名片' });
-  assert.deepEqual(parse('/manage card 10001 ""').values, { user_id: '10001', card: '' });
-  assert.deepEqual(parse('/manage notice 多行\n公告 正文').values, { content: '多行 公告 正文' });
-  for (const text of ['/manage ban', '/manage status', '/manage ban @重名', '/manage ban @陌生人', '/manage ban [@:伪造]', '/manage ban 10001 -1', '/manage ban 10001 2592001', '/manage ban 10001 60 多余', '/manage ban_all 多余', '/manage rename "未闭合']) assert.throws(() => parse(text), text);
-  assert.equal(manageCompletion('/manage ba')?.prefix, 'ba');
-  assert.equal(manageCompletion('/manage ban ')?.field?.kind, 'user');
-  assert.equal(manageCompletion('/manage ban [@:含 空格] ')?.field?.key, 'duration');
-  assert.equal(manageCompletion('聊天 /manage ban'), undefined);
-  assert.equal(commandWords('/manage card 10001 "a \\"b\\""')[3].closed, true);
+  assert.deepEqual(parse('/group card @昵称 "新 名片"').values, { user_id: '10001', card: '新 名片' });
+  assert.deepEqual(parse('/group card 10001 ""').values, { user_id: '10001', card: '' });
+  assert.deepEqual(parse('/group notice publish 多行\n公告 正文').values, { content: '多行 公告 正文' });
+  for (const text of ['/manage ban', '/manage status', '/manage ban @重名', '/manage ban @陌生人', '/manage ban [@:伪造]', '/manage ban 10001 -1', '/manage ban 10001 2592001', '/manage ban 10001 60 多余', '/manage ban_all 多余', '/group name "未闭合']) assert.throws(() => parse(text), text);
+  assert.equal(commandLineCompletion('/manage ba', 'group')?.prefix, 'ba');
+  assert.equal(commandLineCompletion('/manage ban ', 'group')?.field?.kind, 'user');
+  assert.equal(commandLineCompletion('/manage ban [@:含 空格] ', 'group')?.field?.key, 'duration');
+  assert.equal(commandLineCompletion('聊天 /manage ban', 'group'), undefined);
+  assert.equal(commandWords('/group card 10001 "a \\"b\\""')[3].closed, true);
+});
+
+
+test('分类入口区分个人、群资料、成员管理和会话，所有路径都指向唯一有效指令', async () => {
+  for (const group of commandGroups) {
+    const paths = Object.keys(group.entries);
+    assert.equal(new Set(paths).size, paths.length);
+    for (const [path, name] of Object.entries(group.entries)) {
+      assert.ok(slashCommands.some(command => command.name === name), group.name + ' ' + path);
+      assert.ok(!paths.some(other => other !== path && other.startsWith(path + ' ')), '子命令不可同时作为有参数的终点和分类');
+    }
+  }
+  const choices = (text: string, type: 'group' | 'private' = 'group') => commandLineCompletion(text, type)?.choices?.map(choice => choice.name) ?? [];
+  assert.deepEqual(choices('/profile '), ['info', 'nickname', 'signature']);
+  assert.deepEqual(choices('/profile ', 'private'), ['info', 'nickname', 'signature']);
+  for (const name of ['name', 'card', 'title', 'notice', 'files']) assert.ok(choices('/group ').includes(name));
+  assert.deepEqual(choices('/group notice '), ['list', 'publish', 'delete']);
+  assert.deepEqual(choices('/group notice p'), ['publish']);
+  assert.ok(choices('/manage ').includes('bans'));
+  for (const name of ['name', 'card', 'title', 'notice', 'files', 'signature']) assert.ok(!choices('/manage ').includes(name));
+  assert.ok(!choices('/chat ', 'group').includes('remark'));
+  assert.ok(!choices('/chat ', 'private').includes('archive'));
+  assert.deepEqual(choices('/group ', 'private'), []);
+  assert.equal(commandGroup('正文 /profile signature'), undefined);
+  const parse = (text: string, type: 'group' | 'private' = 'group') => parseCommandLine(text, type);
+  assert.equal(parse('/group notice list').command.action, '_get_group_notice');
+  assert.equal(parse('/group files browse').command.special, 'files');
+  assert.deepEqual(parse('/profile nickname 新 昵称', 'private').values, { nickname: '新 昵称' });
+  assert.deepEqual(parse('/profile signature ""').values, { longNick: '' });
+  assert.deepEqual(parse('/group notice publish 新 公告').values, { content: '新 公告' });
+  for (const text of ['/profile signature', '/profile nickname', '/group notice', '/group notice unknown', '/manage card 10001 名片']) assert.throws(() => parse(text), text);
+  assert.throws(() => parse('/group name 新群名', 'private'), /仅用于群聊/);
+  let params: Record<string, unknown> | undefined;
+  await executeSlashApi(parse('/profile nickname 新昵称').command, context, io({ ask: async () => '新昵称', call: async (action, value) => { assert.equal(action, 'set_qq_profile'); params = value; } }));
+  assert.deepEqual(params, { nickname: '新昵称' }, '昵称修改不附带签名、性别等其他资料');
 });

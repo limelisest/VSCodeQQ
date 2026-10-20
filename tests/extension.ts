@@ -14,6 +14,8 @@ import { testEmojiOrder } from './emojiOrderExtension';
 import { testAttention } from './attentionExtension';
 import { testOperationLocks } from './operationExtension';
 import { testResources } from './resourceExtension';
+import { testPaste } from './pasteExtension';
+import { testPermissions } from './permissionExtension';
 import { testDraftRestore } from './draftRestoreExtension';
 import { testLinkUpdates } from './linkUpdatesExtension';
 import { testListSearch, testListActive } from './listSearchExtension';
@@ -67,6 +69,19 @@ export async function run(): Promise<void> {
     await until(() => settingsReady);
     checks.push('连接设置页面入口、输入校验、Token 保留/清除/不回传、独立测试连接');
     await app.settings.handle({ action: 'connect', ...form, token: '', clearToken: true }); assert.equal(app.ready, true); checks.push('设置页保存并连接、NapCat 握手与会话列表');
+    if (process.env.QQ_TEST_PERMISSIONS_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testPermissions(app, backend, ui, checks);
+      console.log(`QQ permission integration: ${checks.length} checks passed`); return;
+    }
+    if (process.env.QQ_TEST_PASTE_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testPaste(app, backend, ui, checks);
+      await testResources(app, backend, ui, checks);
+      console.log(`QQ paste integration: ${checks.length} checks passed`); return;
+    }
     if (process.env.QQ_TEST_ATTENTION_ONLY === '1') {
       ui = await TestUI.connect(); await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -856,11 +871,11 @@ export async function run(): Promise<void> {
       assert.match((item.label as vscode.CompletionItemLabel).description ?? '', /[\u4e00-\u9fff]/);
       assert.equal(item.detail, undefined);
       assert.equal(item.documentation, undefined);
-      assert.equal(item.command?.command, completionLabel(item) === '/manage' ? 'editor.action.triggerSuggest' : undefined, '补全仅填入命令或继续下级候选');
+      assert.equal(item.command?.command, ['/manage', '/profile', '/group', '/chat'].includes(completionLabel(item)) ? 'editor.action.triggerSuggest' : undefined, '补全仅填入命令或继续下级候选');
     }
     assert.equal(completions.items.filter(item => completionLabel(item).startsWith('/')).length, 13);
-    for (const name of ['recall', 'forward', 'manage', 'history', 'search']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
-    for (const name of ['status', 'version', 'cookies', 'restart', 'ban', 'requests', 'group_files']) assert.ok(!completions.items.some(item => completionLabel(item) === '/' + name));
+    for (const name of ['recall', 'forward', 'manage', 'profile', 'group', 'chat']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
+    for (const name of ['status', 'version', 'cookies', 'restart', 'ban', 'requests', 'group_files', 'history', 'search', 'signature']) assert.ok(!completions.items.some(item => completionLabel(item) === '/' + name));
     const sendsBeforePicker = backend.sent.length;
     await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
     await ui.waitFor("!!document.activeElement?.closest('.monaco-editor')");
@@ -1124,9 +1139,11 @@ export async function run(): Promise<void> {
     await testSystemChat(app, backend, ui, checks);
     await testOperationLocks(app, backend, ui, checks);
     await testResources(app, backend, ui, checks);
+    await testPaste(app, backend, ui, checks);
     await testForwardCommands(app, backend, ui, checks);
     console.log('Forward integration: passed');
     await testSlashCommands(app, backend, ui, checks);
+    await testPermissions(app, backend, ui, checks);
     await app.store!.flush();
     await fs.writeFile(path.join(output, 'extension-result.json'), JSON.stringify({ passed: checks, simulatedSends: backend.sent.length, realSends: 0 }, null, 2));
     console.log(`QQ extension integration: ${checks.length} checks passed`);

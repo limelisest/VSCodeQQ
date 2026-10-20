@@ -438,9 +438,17 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     const region = this.region(doc);
     if (!region || ranges.some(r => doc.offsetAt(r.start) < region.start)) return;
     if (ranges.length !== 1) return;
-    if (data.get(RESOURCE_MIME)) return this.pasteResources(doc, ranges[0], data, token);
-    const imported = await this.importTransfer(doc, ranges[0], data, token);
-    if (imported) return [new vscode.DocumentPasteEdit(imported.text, imported.image ? '作为 QQ 图片粘贴' : '作为 QQ 附件粘贴', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', imported.image ? 'image' : 'file'))];
+    try {
+      if (data.get(RESOURCE_MIME)) return await this.pasteResources(doc, ranges[0], data, token);
+      const imported = await this.importTransfer(doc, ranges[0], data, token);
+      if (imported) return [new vscode.DocumentPasteEdit(imported.text, imported.image ? '作为 QQ 图片粘贴' : '作为 QQ 附件粘贴', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', imported.image ? 'image' : 'file'))];
+    } catch (error) {
+      if (token.isCancellationRequested) return;
+      void vscode.window.showErrorMessage(`粘贴失败：${error instanceof Error ? error.message : String(error)}`);
+      // Throwing lets VS Code choose its plain text/path edit. Return an unchanged
+      // selection instead, so a failed import cannot replace a draft with a path.
+      return [new vscode.DocumentPasteEdit(doc.getText(ranges[0]), '保留草稿', vscode.DocumentDropOrPasteEditKind.Empty.append('qq', 'resources'))];
+    }
   }
 
   release(doc: vscode.TextDocument): void {

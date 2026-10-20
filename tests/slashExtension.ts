@@ -5,13 +5,18 @@ import { MockNapCat, until } from './fixture';
 import { TestUI } from './ui';
 const label = (item: vscode.CompletionItem) => typeof item.label === 'string' ? item.label : item.label.label;
 export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
+  backend.memberRoles.set('123456', 'owner');
+  app.session.memberLoaded.delete('group:20002'); await app.loadMembers('group:20002');
+  try {
   await app.openChat('private:10001');
   const privateEditor = vscode.window.activeTextEditor!;
   app.store!.setDraft('private:10001', '/', undefined, []);
   await until(() => app.native.draft(privateEditor.document) === '/' && !app.native.isUpdating(privateEditor.document));
   const completions = await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', privateEditor.document.uri, privateEditor.document.positionAt(privateEditor.document.getText().length), '/');
   assert.ok(completions.items.some(item => label(item) === '/emoji'));
-  assert.ok(!completions.items.some(item => ['/status', '/ban', '/mention', '/manage', '/group_files'].includes(label(item))));
+  assert.ok(!completions.items.some(item => ['/status', '/ban', '/mention', '/manage', '/group', '/group_files', '/history'].includes(label(item))));
+  assert.ok(completions.items.some(item => label(item) === '/profile'));
+  assert.ok(completions.items.some(item => label(item) === '/chat'));
   app.store!.setDraft('private:10001', '', undefined, []);
   checks.push('Slash 菜单只显示常用聊天入口，底层接口不进入候选，私聊隐藏群管理');
   await app.openChat('group:20002');
@@ -45,13 +50,14 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   assert.ok(!backend.calls.some(c => c.action === 'set_group_ban'), 'Tab 补全不执行管理操作');
   const commandText = app.native.draft(editor.document);
   await vscode.commands.executeCommand('hideSuggestWidget');
-  await ui.enter();
-  await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('确认操作')`);
+  const cancelledInline = vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+  await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+  await cancelledInline;
   await until(() => app.native.draft(editor.document) === commandText);
   assert.ok(!backend.calls.some(c => c.action === 'set_group_ban'));
   await ui.enter();
-  await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('确认操作')`);
+  await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await ui.call('Input.insertText', { text: '确认' });
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
   await ui.enter();
@@ -71,6 +77,61 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
     assert.equal(backend.sent.length, beforeManagement);
   }
   checks.push('缺失成员、非法时长和未知子命令均保留草稿，不请求管理接口，也不作为 QQ 消息发送');
+  const showDraft = async (text: string) => {
+    await vscode.commands.executeCommand('hideSuggestWidget');
+    app.store!.setDraft('group:20002', text, undefined, []);
+    await until(() => app.native.draft(editor.document) === text && !app.native.isUpdating(editor.document));
+    await app.native.focus(editor);
+  };
+  const candidates = async (text: string) => {
+    await showDraft(text);
+    return (await vscode.commands.executeCommand<vscode.CompletionList>('vscode.executeCompletionItemProvider', editor.document.uri, editor.document.positionAt(editor.document.getText().length), ' ')).items.map(label);
+  };
+  const memberChoices = await candidates('/manage ');
+  for (const name of ['card', 'title', 'rename', 'notice', 'folder']) assert.ok(!memberChoices.includes(name));
+  assert.ok(memberChoices.includes('bans'));
+  const groupChoices = await candidates('/group ');
+  for (const name of ['name', 'card', 'title', 'notice', 'files']) assert.ok(groupChoices.includes(name));
+  assert.deepEqual(await candidates('/profile '), ['info', 'nickname', 'signature']);
+  await showDraft('/group notice p');
+  await vscode.commands.executeCommand('editor.action.triggerSuggest');
+  await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('publish')`);
+  await ui.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
+  await ui.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+  await until(() => app.native.draft(editor.document) === '/group notice publish ');
+  assert.ok(!backend.calls.some(call => call.action === '_send_group_notice'));
+  await showDraft('/profile nickname 新昵称');
+  const membersBeforeProfile = backend.calls.filter(call => call.action === 'get_group_member_list').length;
+  const acceptProfile = async () => {
+    await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作') && document.querySelector('.quick-input-widget')?.textContent.includes('个人资料 (123456)') && document.querySelector('.quick-input-widget')?.textContent.includes('/profile nickname')`);
+    await ui.call('Input.insertText', { text: '确认' });
+    await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
+    await ui.enter();
+  };
+  const profile = vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+  await acceptProfile(); await profile;
+  assert.deepEqual(backend.calls.find(call => call.action === 'set_qq_profile')!.params, { nickname: '新昵称' });
+  assert.ok((await app.settings.state()).connection.account?.includes('新昵称'));
+  await until(() => app.native.draft(editor.document) === '');
+  assert.equal(backend.calls.filter(call => call.action === 'get_group_member_list').length, membersBeforeProfile);
+  backend.rejectedActions.add('set_qq_profile');
+  try {
+    await showDraft('/profile nickname 失败昵称');
+    const failedProfile = assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); });
+    await acceptProfile(); await failedProfile;
+    assert.equal(app.native.draft(editor.document), '/profile nickname 失败昵称');
+    assert.ok((await app.settings.state()).connection.account?.includes('新昵称'));
+  } finally { backend.rejectedActions.delete('set_qq_profile'); }
+  await showDraft('/profile signature');
+  await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); });
+  assert.equal(app.native.draft(editor.document), '/profile signature');
+  assert.ok(!backend.calls.some(call => call.action === 'set_self_longnick'));
+  await showDraft('/chat favorite');
+  const wasFavorite = app.store!.favorites.has('group:20002');
+  await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+  assert.equal(!!app.store!.favorites.has('group:20002'), !wasFavorite);
+  assert.equal(backend.sent.length, beforeManagement);
+  checks.push('个人资料、群资料、成员管理和会话分别补全，公告支持三级 Tab；昵称确认明确指向本人且不获取群成员，失败保留草稿与原资料，空签名不误清除');
   app.store!.setDraft('group:20002', '/status', undefined, []);
   await until(() => app.native.draft(editor.document) === '/status' && !app.native.isUpdating(editor.document));
   await app.native.focus(editor);
@@ -103,7 +164,7 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   await ui.call('Input.insertText', { text: '77990' });
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('77990')`);
   await ui.enter();
-  await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('确认操作')`);
+  await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await ui.call('Input.insertText', { text: '确认' });
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
   await ui.enter();
@@ -157,7 +218,7 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('同意')`); await ui.enter();
   await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('好友备注')`);
   await ui.call('Input.insertText', { text: '申请备注' }); await ui.enter();
-  await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes('确认操作')`);
+  await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await ui.call('Input.insertText', { text: '确认' });
   await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
   await ui.enter();
@@ -173,4 +234,5 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   assert.equal(app.store!.draft('group:20002').text, app.store!.draft('group:20002').replyPlaceholder + '操作期间保留草稿');
   assert.equal(backend.sent.length, beforeSends);
   checks.push('/group_files 真实浏览根目录和文件夹，取消不下载、不发送、不改变草稿');
+  } finally { backend.memberRoles.delete('123456'); app.session.memberLoaded.delete('group:20002'); }
 }

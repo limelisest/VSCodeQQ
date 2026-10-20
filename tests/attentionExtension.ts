@@ -25,6 +25,16 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
     await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
   };
+  const aboveMessage = async (editor: vscode.TextEditor, id: string) => {
+    const start = app.transcript!.rendered.get(key)!.starts.get(id)!;
+    assert.equal(app.editor.provideAttentionLinks(editor.document)[0].range.start.line, start);
+    const stamp = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.exec(editor.document.lineAt(start).text)![0];
+    await ui.waitFor(`(() => {
+      const link = (${buttons})[0];
+      const date = [...document.querySelectorAll('.editor-group-container.active .view-line')].find(line => line.textContent.replace(/\\u00a0/g, ' ').includes(${JSON.stringify(stamp)}));
+      return link && date && link.getBoundingClientRect().bottom <= date.getBoundingClientRect().top + 1;
+    })()`);
+  };
   try {
     await app.openChat(key); await app.loadHistory(key);
     store.setDraft(key, '定位后保留的草稿'); await app.native.sync(vscode.window.activeTextEditor!);
@@ -50,14 +60,15 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     assert.deepEqual(store.unseenAttention(key).map(m => m.id), ['880008']);
     assert.equal(store.draft(key).text, '定位后保留的草稿');
     assert.equal(app.editor.isFollowing(editor), false);
-    assert.equal(app.editor.provideAttentionLinks(editor.document)[0].range.start.line, app.transcript!.rendered.get(key)!.actions.find(a => a.messageId === '880040' && a.kind === 'reply')!.line);
+    await aboveMessage(editor, '880040');
     assert.equal(app.editor.provideAttentionLinks(editor.document)[0].command!.arguments![1], '880008');
     assert.equal(await ui.evaluate(`Array.from(document.querySelectorAll('.statusbar-item')).some(el=>el.textContent.includes(${JSON.stringify(label)}))`), false);
-    checks.push('分界线上方只有一个链接，点击定位最近待看消息后把下一条链接移到目标消息上，不写入草稿');
+    checks.push('分界线上方只有一个链接，点击后下一条链接显示在目标消息 DATE 上方，真实界面验证位置，不写入草稿');
     await config.update('codeLanguage', 'python', vscode.ConfigurationTarget.Global);
     await app.native.sync(editor, true);
     await until(() => app.native.historyMatches(editor.document) && editor.document.getText().includes('def '));
     await ui.waitFor(`(${buttons}).length === 1`);
+    await aboveMessage(editor, '880040');
     await new Promise(resolve => setTimeout(resolve, 500));
     const shot = await ui.call('Page.captureScreenshot', { format: 'png' });
     const folder = path.join(__dirname, '..', '..', '.test-output'); await fs.mkdir(folder, { recursive: true });

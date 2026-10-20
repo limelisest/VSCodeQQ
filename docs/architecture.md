@@ -18,6 +18,8 @@
 | `store.ts` | 账号数据、消息合并、未读、缓存保存 | 代码语言格式、控件操作 |
 | `emojiPicker.ts` | 收藏/最近/QQ 表情选择 | 旧输入框的草稿和发送处理 |
 | `slashCatalog.ts` | 英文指令、中文说明、上下文、字段校验与 OneBot API 映射 | VS Code 对话框 |
+| `commandLine.ts` | 分类路径、逐级补全、参数分词和校验 | VS Code 对话框、网络请求 |
+| `commandPermissions.ts` | 群角色、成员层级、消息归属和群文件上传者校验；提交前刷新权限 | VS Code 对话框、使用显示缓存授权 |
 | `slashCommands.ts` | 指令调度、参数选择、确认、只读结果、群文件浏览 | 聊天发送队列实现 |
 | `requestInbox.ts` | 按账号收集、去重并限制申请事件 | 自动同意、磁盘凭证 |
 | `emojiCompletion.ts` | !表情 / ！表情补全入口、打开面板前的会话校验 | 消息发送 |

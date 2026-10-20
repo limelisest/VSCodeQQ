@@ -9,25 +9,43 @@ export interface SlashField {
 }
 export interface SlashCommand {
   name: string; description: string; category: string; scope?: SlashScope;
-  local?: string; special?: 'help' | 'manage' | 'reply' | 'requests' | 'files' | 'poke';
+  local?: string; special?: 'help' | 'namespace' | 'reply' | 'requests' | 'files' | 'poke';
   action?: string; fields?: SlashField[]; defaults?: Record<string, unknown>;
-  group?: boolean; mutation?: boolean; confirm?: string; sensitive?: boolean;
+  target?: 'self'; group?: boolean; mutation?: boolean; confirm?: string; sensitive?: boolean;
 }
 const user = (label = '选择成员或输入 QQ 号'): SlashField => ({ key: 'user_id', label, kind: 'user' });
 const message: SlashField = { key: 'message_id', label: '选择消息', kind: 'message' };
 const text = (key: string, label: string, allowEmpty = false): SlashField => ({ key, label, allowEmpty });
 const integer = (key: string, label: string, initial: string, min: number, max: number): SlashField => ({ key, label, kind: 'integer', initial, min, max });
-const local = (name: string, description: string, command: string, scope?: SlashScope): SlashCommand => ({ name, description, category: '聊天', local: command, scope });
-const query = (name: string, description: string, action: string, fields: SlashField[] = [], group = false): SlashCommand => ({ name, description, category: '查询', action, fields, group, scope: group ? 'group' : undefined });
-const change = (name: string, description: string, action: string, fields: SlashField[], group = false): SlashCommand => ({ ...query(name, description, action, fields, group), category: group ? '群管理' : '操作', mutation: true, confirm: description });
+const categoryFor = (name: string) => commandGroups.find(group => Object.values(group.entries).includes(name))?.description;
+const local = (name: string, description: string, command: string, scope?: SlashScope): SlashCommand => ({ name, description, category: categoryFor(name) ?? (['emoji', 'image', 'video', 'file', 'mention'].includes(name) ? '插入' : '消息'), local: command, scope });
+const query = (name: string, description: string, action: string, fields: SlashField[] = [], group = false): SlashCommand => ({ name, description, category: categoryFor(name) ?? '查询', action, fields, group, scope: group ? 'group' : undefined });
+const change = (name: string, description: string, action: string, fields: SlashField[], group = false): SlashCommand => ({ ...query(name, description, action, fields, group), category: categoryFor(name) ?? (group ? '成员管理' : '消息'), mutation: true, confirm: description });
 const groupChange = (name: string, description: string, action: string, fields: SlashField[], defaults?: Record<string, unknown>): SlashCommand => ({ ...change(name, description, action, fields, true), defaults });
+export interface CommandGroup { name: string; description: string; scope?: SlashScope; entries: Readonly<Record<string, string>>; }
+export const commandGroups: readonly CommandGroup[] = [
+  { name: 'chat', description: '会话操作', entries: {
+    history: 'history', latest: 'latest', search: 'search', favorite: 'favorite', mute: 'mute', read: 'read', archive: 'archive', remark: 'friend_remark', requests: 'requests'
+  } },
+  { name: 'profile', description: '个人资料', entries: { info: 'login', nickname: 'profile_name', signature: 'signature' } },
+  { name: 'group', description: '群资料', scope: 'group', entries: {
+    info: 'group_info', name: 'rename', card: 'card', title: 'title', remark: 'group_remark', honors: 'honors', sign: 'sign',
+    'notice list': 'notices', 'notice publish': 'notice', 'notice delete': 'notice_delete',
+    'essence list': 'essence', 'essence add': 'essence_add', 'essence remove': 'essence_remove',
+    'files browse': 'group_files', 'files space': 'file_space', 'files folder': 'folder', 'files folder_delete': 'folder_delete', 'files delete': 'group_file_delete'
+  } },
+  { name: 'manage', description: '成员管理', scope: 'group', entries: {
+    ban: 'ban', unban: 'unban', ban_all: 'ban_all', unban_all: 'unban_all', kick: 'kick', admin: 'admin', unadmin: 'unadmin',
+    members: 'members', member: 'member', bans: 'group_bans', at_all: 'at_all_remaining', requests: 'group_requests', leave: 'leave', dismiss: 'dismiss'
+  } }
+];
 export const slashCommands: readonly SlashCommand[] = [
   local('emoji', '打开表情面板', 'qq.emojis'),
   local('image', '选择图片插入草稿', 'qq.insertImage'),
   local('video', '选择视频插入草稿', 'qq.insertVideo'),
   local('file', '选择文件插入草稿', 'qq.insertFile'),
   local('mention', '选择群成员并 @提及', 'qq.mentionMember', 'group'),
-  { name: 'reply', description: '选择会话消息并回复', category: '聊天', special: 'reply' },
+  { name: 'reply', description: '选择会话消息并回复', category: '消息', special: 'reply' },
   local('cancel_reply', '取消草稿中的回复引用', 'qq.cancelReply'),
   local('history', '加载更早的历史记录', 'qq.loadHistory'),
   local('latest', '回到底部最新消息与草稿', 'qq.latest'),
@@ -40,7 +58,7 @@ export const slashCommands: readonly SlashCommand[] = [
   local('style', '切换聊天记录代码风格', 'qq.chooseCodeLanguage'),
   local('refresh', '刷新会话与联系人列表', 'qq.refresh'),
   { name: 'help', description: '查看常用指令菜单', category: '帮助', special: 'help' },
-  { name: 'manage', description: '群管理', category: '聊天', scope: 'group', special: 'manage' },
+  ...commandGroups.map(group => ({ name: group.name, description: group.description, category: group.description, scope: group.scope, special: 'namespace' as const })),
   change('recall', '撤回所选消息', 'delete_msg', [message]),
   query('message', '查看消息详情', 'get_msg', [message]),
   local('forward_info', '查看合并转发内容', 'qq.viewForward'),
@@ -51,7 +69,7 @@ export const slashCommands: readonly SlashCommand[] = [
   { ...query('user', '查看 QQ 用户资料', 'get_stranger_info', [user()]), defaults: { no_cache: true } },
   query('friends', '查看好友列表', 'get_friend_list'),
   query('groups', '查看群聊列表', 'get_group_list'),
-  { ...query('group', '查看当前群资料', 'get_group_info', [], true), defaults: { no_cache: true } },
+  { ...query('group_info', '查看当前群资料', 'get_group_info', [], true), defaults: { no_cache: true } },
   { ...query('member', '查看群成员资料', 'get_group_member_info', [user()], true), defaults: { no_cache: true } },
   query('members', '查看当前群成员列表', 'get_group_member_list', [], true),
   { ...query('honors', '查看群荣誉信息', 'get_group_honor_info', [], true), defaults: { type: 'all' } },
@@ -68,8 +86,8 @@ export const slashCommands: readonly SlashCommand[] = [
   groupChange('kick', '将成员移出群聊', 'set_group_kick', [user()], { reject_add_request: false }),
   groupChange('admin', '设置群管理员', 'set_group_admin', [user()], { enable: true }),
   groupChange('unadmin', '取消群管理员', 'set_group_admin', [user()], { enable: false }),
-  groupChange('card', '修改群名片（留空恢复默认）', 'set_group_card', [user(), text('card', '新的群名片', true)]),
-  groupChange('title', '修改成员专属头衔（留空清除）', 'set_group_special_title', [user(), text('special_title', '新的专属头衔', true)], { duration: -1 }),
+  groupChange('card', '修改群名片', 'set_group_card', [user(), text('card', '新的群名片', true)]),
+  groupChange('title', '修改专属头衔', 'set_group_special_title', [user(), text('special_title', '新的专属头衔', true)], { duration: -1 }),
   groupChange('rename', '修改群名称', 'set_group_name', [text('group_name', '新的群名称')]),
   groupChange('leave', '退出当前群聊', 'set_group_leave', [], { is_dismiss: false }),
   groupChange('dismiss', '解散当前群聊（仅群主）', 'set_group_leave', [], { is_dismiss: true }),
@@ -90,7 +108,8 @@ export const slashCommands: readonly SlashCommand[] = [
   { ...change('unreact', '取消消息表情回应', 'set_msg_emoji_like', [message, text('emoji_id', '表情 ID，例如 76（赞）')]), defaults: { set: false } },
   { ...change('friend_remark', '修改当前好友备注', 'set_friend_remark', [text('remark', '新的好友备注', true)]), scope: 'private' },
   groupChange('group_remark', '修改本机 QQ 群备注', 'set_group_remark', [text('remark', '新的群备注', true)]),
-  change('signature', '修改 QQ 个性签名', 'set_self_longnick', [text('longNick', '新的个性签名', true)]),
+  { ...change('signature', '修改个性签名', 'set_self_longnick', [text('longNick', '签名', true)]), category: '个人资料', target: 'self' },
+  { ...change('profile_name', '修改昵称', 'set_qq_profile', [text('nickname', '昵称')]), category: '个人资料', target: 'self' },
   query('online_clients', '查看在线客户端列表', 'get_online_clients'),
   query('friend_categories', '查看好友分组列表', 'get_friends_with_category'),
   { ...query('recent_contacts', '查看最近会话记录', 'get_recent_contact'), defaults: { count: 50 } },
@@ -106,7 +125,7 @@ export const slashCommands: readonly SlashCommand[] = [
   { ...change('backend_cache', '清理服务端媒体与文件缓存', 'clean_cache', []), category: '高级' }
 ];
 export const availableSlashCommands = (type: SlashScope): readonly SlashCommand[] => slashCommands.filter(command => !command.scope || command.scope === type);
-const menuNames = new Set(['emoji', 'image', 'video', 'file', 'mention', 'reply', 'cancel_reply', 'forward', 'recall', 'history', 'latest', 'search', 'manage']);
+const menuNames = new Set(['emoji', 'image', 'video', 'file', 'mention', 'reply', 'cancel_reply', 'forward', 'recall', ...commandGroups.map(group => group.name)]);
 export const menuSlashCommands = (type: SlashScope): readonly SlashCommand[] => availableSlashCommands(type).filter(command => menuNames.has(command.name));
 export function exactSlashCommand(text: string, type: SlashScope): SlashCommand | undefined {
   const match = /^\/([a-z][a-z0-9_]*)$/i.exec(text.trim());
