@@ -50,7 +50,7 @@ export class SlashCommands implements vscode.Disposable {
     if (group) { check(); if (group.scope && group.scope !== chat.type) throw new Error('此指令仅用于群聊'); await vscode.commands.executeCommand('qq.commandGroup', name); return; }
     if (!name || name === 'help') {
       return this.host.session.run(JSON.stringify(['slash-menu', chat.key]), async () => {
-        const chosen = await vscode.window.showQuickPick(menuSlashCommands(chat.type).map(c => ({ label: c.description, description: '/' + c.name, value: c.name })), { title: `QQ 指令 · ${chat.name}`, matchOnDescription: true });
+        const chosen = await vscode.window.showQuickPick(menuSlashCommands(chat.type).filter(c => c.special !== 'help').map(c => ({ label: c.description, description: '/' + c.name, value: c.name })), { title: `QQ 指令 · ${chat.name}`, matchOnDescription: true });
         check(); if (chosen) await this.run(chosen.value, invocation); return;
       });
     }

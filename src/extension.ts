@@ -19,7 +19,7 @@ import { fileTransferNotice } from './fileNotices';
 import { PrivateChatProfiles } from './privateChatProfiles';
 import { RESOURCE_MIME } from './resourceClipboard';
 import { SlashCommands, SlashInvocation } from './slashCommands';
-import { menuSlashCommands, exactSlashCommand } from './slashCatalog';
+import { menuSlashCommands, exactSlashCommand, validateSlashField } from './slashCatalog';
 import { commandGroup, commandLineCompletion, lineCommand, parseCommandLine } from './commandLine';
 import { memberAllowed, usableMessage } from './commandPermissions';
 import { boundReplies, outgoingReply } from './replies';
@@ -153,10 +153,11 @@ export class QQApp implements vscode.Disposable {
               .map(member => make('@' + member.name, member.id, store.reserveMention(chat.key, member.id, member.name) + ' ', vscode.CompletionItemKind.User)), true);
           }
           if (context.field?.kind === 'integer') {
-            const values = [...new Set([context.field.initial, ...(context.field.key === 'duration' ? ['60', '300', '1800', '3600'] : [])].filter((value): value is string => !!value))];
+            const values = [...new Set([...(validateSlashField(context.field, context.prefix) ? [] : [context.prefix]), context.field.initial, ...(context.field.key === 'duration' ? ['60', '300', '1800', '3600'] : [])].filter((value): value is string => !!value))];
             return new vscode.CompletionList(values.filter(value => value.startsWith(context.prefix)).map(value => make(value, context.field!.label, value)), true);
           }
           if (context.field?.kind === 'message') return new vscode.CompletionList((store.messages.get(chat.key) ?? []).filter(message => usableMessage(message, chat.key) && message.id.startsWith(context.prefix)).map(message => make(message.id, message.senderName, message.id)), true);
+          if (context.field && !context.field.kind && context.prefix) return [make(context.prefix, context.field.label, lineBefore.slice(context.start))];
           return [];
         }
         const before = doc.lineAt(position.line).text.slice(0, position.character);
@@ -752,9 +753,9 @@ export class QQApp implements vscode.Disposable {
       const line = outgoingReply({ ...store.draft(key), text }).text;
       if (chat && commandGroup(line)) {
         try { parseCommandLine(line, chat.type, store.draft(key).mentions, [...store.members.get(key)?.values() ?? []]); } catch { return; }
-        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true);
       } else if (chat && exactSlashCommand(line, chat.type)) {
-        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+        await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true);
       }
     });
     register('qq.commandGroup', async (name: string) => {
@@ -771,13 +772,14 @@ export class QQApp implements vscode.Disposable {
       await this.native.focus(editor);
       await vscode.commands.executeCommand('editor.action.triggerSuggest');
     });
-    register('qq.send', async (uri?: string) => {
+    // Only confirming a suggestion opts into command execution; normal sends keep slash text literal.
+    register('qq.send', async (uri?: string, fromCompletion = false) => {
       const editor = vscode.window.activeTextEditor, key = editor && this.transcript?.key(editor.document.uri);
       if (!editor || !key) return;
       if (uri && editor.document.uri.toString() !== vscode.Uri.parse(uri).toString()) return;
       const text = this.native.draft(editor.document), chat = this.store?.chats.get(key);
       const store = this.store, line = store && outgoingReply({ ...store.draft(key), text }).text;
-      if (store && chat && line && commandGroup(line)) {
+      if (fromCompletion && store && chat && line && commandGroup(line)) {
         const group = commandGroup(line)!;
         if (group.scope && group.scope !== chat.type) throw new Error('此指令仅用于群聊');
         if (line.trim().toLowerCase() === '/' + group.name) { await vscode.commands.executeCommand('qq.commandGroup', group.name); return; }
@@ -798,7 +800,7 @@ export class QQApp implements vscode.Disposable {
         else await this.slash.run(parsed.command.name, invocation, parsed.values, clearCommand);
         return;
       }
-      const command = chat && exactSlashCommand(outgoingReply({ ...this.store!.draft(key), text }).text, chat.type);
+      const command = fromCompletion && chat && exactSlashCommand(outgoingReply({ ...this.store!.draft(key), text }).text, chat.type);
       if (command) {
         const invocation = this.slash.capture(editor.document.uri), region = this.native.region(editor.document);
         const keep = boundReplies(text, this.store!.draft(key).replies).map(reply => reply.token).join('');

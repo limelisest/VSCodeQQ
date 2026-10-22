@@ -94,11 +94,11 @@ export async function testPermissions(app: QQApp, backend: MockNapCat, ui: TestU
     app.store!.setDraft(group, '/manage ban 10001 60', undefined, []);
     await app.native.sync(editor); await app.native.focus(editor);
     const beforeBan = calls('set_group_ban');
-    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); }, /管理员权限/);
+    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); }, /管理员权限/);
     assert.equal(app.native.draft(editor.document), '/manage ban 10001 60');
     assert.equal(calls('set_group_ban'), beforeBan);
     app.store!.setDraft(group, '/ban_all', undefined, []); await app.native.sync(editor);
-    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); }, /管理员权限/);
+    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); }, /管理员权限/);
     assert.equal(app.native.draft(editor.document), '/ban_all');
     await vscode.commands.executeCommand('notifications.clearAll');
     checks.push('分类指令和旧单词指令权限不足时都保留草稿，不向 QQ 发送命令或管理请求');
@@ -133,7 +133,7 @@ export async function testPermissions(app: QQApp, backend: MockNapCat, ui: TestU
     backend.memberRoles.set('30001:' + self, 'member');
     const beforeRequests = calls('set_group_add_request');
     app.store!.setDraft(group, '/chat requests', undefined, []); await app.native.sync(editor);
-    const deniedRequest = assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); }, /管理员权限/);
+    const deniedRequest = assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); }, /管理员权限/);
     await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('处理申请')`);
     await choose('10005'); await deniedRequest;
     assert.equal(calls('set_group_add_request'), beforeRequests);
@@ -143,7 +143,7 @@ export async function testPermissions(app: QQApp, backend: MockNapCat, ui: TestU
 
     app.slash.requests.clear();
     app.slash.requests.add({ post_type: 'request', request_type: 'group', sub_type: 'invite', self_id: self, user_id: '10005', group_id: '30001', flag: 'permission-invite' }, self);
-    const invited = vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+    const invited = vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true);
     await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('处理申请')`);
     await choose('10005');
     await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('同意')`);

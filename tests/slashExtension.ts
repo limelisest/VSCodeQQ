@@ -20,7 +20,62 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   app.store!.setDraft('private:10001', '', undefined, []);
   checks.push('Slash 菜单只显示常用聊天入口，底层接口不进入候选，私聊隐藏群管理');
   await app.openChat('group:20002');
-  const editor = vscode.window.activeTextEditor!;
+  let editor = vscode.window.activeTextEditor!;
+  // Slash-shaped messages remain literal unless Enter confirms a visible suggestion.
+  for (const [key, text, suggest, tab, sendButton] of [
+    ['private:10001', '/help', false, false, false],
+    ['group:20002', '/help', true, false, false],
+    ['group:20002', '/help', true, true, false],
+    ['group:20002', '/help', true, false, true],
+    ['group:20002', '/chat favorite', false, false, false],
+    ['group:20002', '/manage ban 10001 42', false, false, false],
+    ['group:20002', '/status', false, false, false]
+  ] as const) {
+    await app.openChat(key);
+    const target = vscode.window.activeTextEditor!;
+    app.store!.setDraft(key, text, undefined, []);
+    await until(() => app.native.draft(target.document) === text && !app.native.isUpdating(target.document));
+    await app.native.focus(target);
+    await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup');
+    await ui.waitFor(`!!document.activeElement?.closest('.monaco-editor')`);
+    const sent = backend.sent.length, favorite = app.store!.favorites.has(key);
+    const bans = backend.calls.filter(call => call.action === 'set_group_ban').length;
+    if (suggest) {
+      await vscode.commands.executeCommand('editor.action.triggerSuggest');
+      await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/help')`);
+      if (tab) {
+        await ui.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+        await ui.call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+        await ui.waitFor(`!document.querySelector('.suggest-widget.visible')`);
+      }
+    }
+    if (sendButton) await vscode.commands.executeCommand('qq.send', target.document.uri.toString());
+    else {
+      await vscode.commands.executeCommand('hideSuggestWidget');
+      await ui.enter();
+    }
+    await until(() => backend.sent.length === sent + 1 && app.native.draft(target.document) === '');
+    assert.deepEqual(backend.sent.at(-1).message, [{ type: 'text', data: { text } }]);
+    assert.equal(app.store!.favorites.has(key), favorite);
+    assert.equal(backend.calls.filter(call => call.action === 'set_group_ban').length, bans);
+    assert.equal(vscode.window.activeTextEditor?.document.uri.scheme, 'qqchat');
+    assert.equal(await ui.evaluate(`!!document.activeElement?.closest('.quick-input-widget')`), false);
+  }
+  checks.push('私聊和群聊直接输入命令、取消补全、Tab 后 Enter、补全可见时点发送均发送原文，不打开菜单或执行本地及管理命令');
+  await app.openChat('group:20002');
+  editor = vscode.window.activeTextEditor!;
+  app.store!.setDraft('group:20002', '/help', undefined, []);
+  await until(() => app.native.draft(editor.document) === '/help' && !app.native.isUpdating(editor.document));
+  await app.native.focus(vscode.window.activeTextEditor!);
+  await vscode.commands.executeCommand('editor.action.triggerSuggest');
+  await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/help')`);
+  const beforeHelp = backend.sent.length;
+  await ui.enter();
+  await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('QQ 指令')`);
+  assert.equal(backend.sent.length, beforeHelp);
+  await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
+  await until(() => app.native.draft(editor.document) === '');
+  checks.push('补全提示可见时 Enter 确认完整 /help，即使文字未变化也正常打开指令菜单且不发送消息');
   app.store!.setDraft('group:20002', '/man', undefined, []);
   await until(() => app.native.draft(editor.document) === '/man' && !app.native.isUpdating(editor.document));
   await app.native.focus(editor);
@@ -50,12 +105,14 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   assert.ok(!backend.calls.some(c => c.action === 'set_group_ban'), 'Tab 补全不执行管理操作');
   const commandText = app.native.draft(editor.document);
   await vscode.commands.executeCommand('hideSuggestWidget');
-  const cancelledInline = vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+  const cancelledInline = vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true);
   await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await vscode.commands.executeCommand('workbench.action.closeQuickOpen');
   await cancelledInline;
   await until(() => app.native.draft(editor.document) === commandText);
   assert.ok(!backend.calls.some(c => c.action === 'set_group_ban'));
+  await vscode.commands.executeCommand('editor.action.triggerSuggest');
+  await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('1800')`);
   await ui.enter();
   await ui.waitFor(`document.activeElement?.closest('.quick-input-widget')?.textContent.includes('确认操作')`);
   await ui.call('Input.insertText', { text: '确认' });
@@ -71,7 +128,7 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
     app.store!.setDraft('group:20002', invalid, undefined, []);
     await until(() => app.native.draft(editor.document) === invalid && !app.native.isUpdating(editor.document));
     const calls = backend.calls.filter(call => call.action.startsWith('set_group')).length;
-    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); });
+    await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); });
     assert.equal(app.native.draft(editor.document), invalid);
     assert.equal(backend.calls.filter(call => call.action.startsWith('set_group')).length, calls);
     assert.equal(backend.sent.length, beforeManagement);
@@ -93,6 +150,8 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   const groupChoices = await candidates('/group ');
   for (const name of ['name', 'card', 'title', 'notice', 'files']) assert.ok(groupChoices.includes(name));
   assert.deepEqual(await candidates('/profile '), ['info', 'nickname', 'signature']);
+  assert.deepEqual(await candidates('/manage ban 10001 42'), ['42']);
+  assert.deepEqual(await candidates('/profile nickname 新昵称'), ['新昵称']);
   await showDraft('/group notice p');
   await vscode.commands.executeCommand('editor.action.triggerSuggest');
   await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('publish')`);
@@ -108,8 +167,10 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
     await ui.waitFor(`document.querySelector('.quick-input-list')?.textContent.includes('确认') && !document.querySelector('.quick-input-list')?.textContent.includes('取消')`);
     await ui.enter();
   };
-  const profile = vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
-  await acceptProfile(); await profile;
+  await vscode.commands.executeCommand('editor.action.triggerSuggest');
+  await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('新昵称')`);
+  await ui.enter();
+  await acceptProfile();
   assert.deepEqual(backend.calls.find(call => call.action === 'set_qq_profile')!.params, { nickname: '新昵称' });
   assert.ok((await app.settings.state()).connection.account?.includes('新昵称'));
   await until(() => app.native.draft(editor.document) === '');
@@ -117,31 +178,32 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   backend.rejectedActions.add('set_qq_profile');
   try {
     await showDraft('/profile nickname 失败昵称');
-    const failedProfile = assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); });
+    const failedProfile = assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); });
     await acceptProfile(); await failedProfile;
     assert.equal(app.native.draft(editor.document), '/profile nickname 失败昵称');
     assert.ok((await app.settings.state()).connection.account?.includes('新昵称'));
   } finally { backend.rejectedActions.delete('set_qq_profile'); }
   await showDraft('/profile signature');
-  await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString()); });
+  await assert.rejects(async () => { await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true); });
   assert.equal(app.native.draft(editor.document), '/profile signature');
   assert.ok(!backend.calls.some(call => call.action === 'set_self_longnick'));
   await showDraft('/chat favorite');
   const wasFavorite = app.store!.favorites.has('group:20002');
-  await vscode.commands.executeCommand('qq.send', editor.document.uri.toString());
+  await vscode.commands.executeCommand('qq.send', editor.document.uri.toString(), true);
   assert.equal(!!app.store!.favorites.has('group:20002'), !wasFavorite);
   assert.equal(backend.sent.length, beforeManagement);
   checks.push('个人资料、群资料、成员管理和会话分别补全，公告支持三级 Tab；昵称确认明确指向本人且不获取群成员，失败保留草稿与原资料，空签名不误清除');
-  app.store!.setDraft('group:20002', '/status', undefined, []);
-  await until(() => app.native.draft(editor.document) === '/status' && !app.native.isUpdating(editor.document));
+  app.store!.setDraft('group:20002', '/profile inf', undefined, []);
+  await until(() => app.native.draft(editor.document) === '/profile inf' && !app.native.isUpdating(editor.document));
   await app.native.focus(editor);
-  await vscode.commands.executeCommand('hideSuggestWidget');
+  await vscode.commands.executeCommand('editor.action.triggerSuggest');
+  await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('info')`);
   const beforeSends = backend.sent.length;
   await ui.enter();
   await until(() => vscode.window.activeTextEditor?.document.uri.scheme === 'qq-result');
-  assert.ok(vscode.window.activeTextEditor!.document.getText().includes('"online": true'));
+  assert.ok(vscode.window.activeTextEditor!.document.getText().includes('123456'));
   assert.equal(app.store!.draft('group:20002').text, '');
-  assert.equal(backend.sent.length, beforeSends, '/status 不能作为聊天文本发送');
+  assert.equal(backend.sent.length, beforeSends, '确认查询补全不能作为聊天文本发送');
   await vscode.window.tabGroups.close(vscode.window.tabGroups.activeTabGroup.activeTab!);
   await app.openChat('group:20002');
   app.store!.setDraft('group:20002', '操作期间保留草稿', '77990', []);
@@ -156,7 +218,7 @@ export async function testSlashCommands(app: QQApp, backend: MockNapCat, ui: Tes
   const beforeStale = backend.calls.length;
   await assert.rejects(app.slash.run('status', { ...invocation, generation: -1 }), /会话或连接/);
   assert.equal(backend.calls.length, beforeStale);
-  checks.push('真实 Enter 执行完整英文指令且不发送到 QQ；取消参数保留草稿和回复，过期补全不能执行');
+  checks.push('真实 Enter 确认查询补全后执行且不发送到 QQ；取消参数保留草稿和回复，过期补全不能执行');
   const original = app.store!.messages.get('group:20002')!.find(m => m.id === '77990')!;
   const originalSegments = structuredClone(original.segments);
   const recalling = vscode.commands.executeCommand('qq.slash', 'recall', invocation);

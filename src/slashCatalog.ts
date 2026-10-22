@@ -125,7 +125,7 @@ export const slashCommands: readonly SlashCommand[] = [
   { ...change('backend_cache', '清理服务端媒体与文件缓存', 'clean_cache', []), category: '高级' }
 ];
 export const availableSlashCommands = (type: SlashScope): readonly SlashCommand[] => slashCommands.filter(command => !command.scope || command.scope === type);
-const menuNames = new Set(['emoji', 'image', 'video', 'file', 'mention', 'reply', 'cancel_reply', 'forward', 'recall', ...commandGroups.map(group => group.name)]);
+const menuNames = new Set(['emoji', 'image', 'video', 'file', 'mention', 'reply', 'cancel_reply', 'forward', 'recall', 'help', ...commandGroups.map(group => group.name)]);
 export const menuSlashCommands = (type: SlashScope): readonly SlashCommand[] => availableSlashCommands(type).filter(command => menuNames.has(command.name));
 export function exactSlashCommand(text: string, type: SlashScope): SlashCommand | undefined {
   const match = /^\/([a-z][a-z0-9_]*)$/i.exec(text.trim());

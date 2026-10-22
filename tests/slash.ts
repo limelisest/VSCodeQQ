@@ -18,9 +18,11 @@ test('指令名全部英文、说明中文，私聊不提供群管理，完整�
   for (const name of ['emoji', 'image', 'video', 'file', 'mention', 'recall', 'status', 'requests', 'group_files']) assert.ok(command(name));
   assert.equal(availableSlashCommands('private').some(c => c.name === 'ban'), false);
   assert.equal(availableSlashCommands('group').some(c => c.name === 'ban'), true);
-  assert.equal(menuSlashCommands('group').length, 13);
-  assert.equal(menuSlashCommands('private').length, 10);
+  assert.equal(menuSlashCommands('group').length, 14);
+  assert.equal(menuSlashCommands('private').length, 11);
   assert.ok(menuSlashCommands('group').some(c => c.name === 'manage'));
+  assert.ok(menuSlashCommands('group').some(c => c.name === 'help'));
+  assert.ok(menuSlashCommands('private').some(c => c.name === 'help'));
   assert.ok(!menuSlashCommands('private').some(c => c.name === 'manage'));
   assert.ok(!menuSlashCommands('group').some(c => c.sensitive || ['ban', 'status', 'restart', 'backend_cache'].includes(c.name)));
   assert.equal(exactSlashCommand(' /STATUS\n', 'group')?.name, 'status');

@@ -873,7 +873,7 @@ export async function run(): Promise<void> {
       assert.equal(item.documentation, undefined);
       assert.equal(item.command?.command, ['/manage', '/profile', '/group', '/chat'].includes(completionLabel(item)) ? 'editor.action.triggerSuggest' : undefined, '补全仅填入命令或继续下级候选');
     }
-    assert.equal(completions.items.filter(item => completionLabel(item).startsWith('/')).length, 13);
+    assert.equal(completions.items.filter(item => completionLabel(item).startsWith('/')).length, 14);
     for (const name of ['recall', 'forward', 'manage', 'profile', 'group', 'chat']) assert.ok(completions.items.some(item => completionLabel(item) === '/' + name));
     for (const name of ['status', 'version', 'cookies', 'restart', 'ban', 'requests', 'group_files', 'history', 'search', 'signature']) assert.ok(!completions.items.some(item => completionLabel(item) === '/' + name));
     const sendsBeforePicker = backend.sent.length;
@@ -901,6 +901,8 @@ export async function run(): Promise<void> {
     await until(() => app!.native.draft(editor.document) === '/emoji' && !app!.native.isUpdating(editor.document));
     assert.equal((app.emojis as any).view?.visible ?? false, false, 'Tab 不能打开表情面板');
     assert.equal(backend.sent.length, sendsBeforePicker, 'Tab 不能发送消息');
+    await vscode.commands.executeCommand('editor.action.triggerSuggest');
+    await ui.waitFor(`document.querySelector('.suggest-widget.visible')?.textContent.includes('/emoji')`);
     await ui.enter();
     await until(() => app!.native.draft(editor.document) === '');
     const emojiUI = await ui.webview();
