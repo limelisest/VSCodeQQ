@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import { promises as mutableFs } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import { AttachmentFiles } from '../src/attachments';
@@ -116,4 +117,74 @@ test('消息下方用资源指针列出原文件名，正文保留顺序引用�
     }
     assert.ok(view.ownLines.length === 0);
   }
+});
+
+test('附件创建失败清理未返回的目标，后续导入不受影响且保留原错误', async t => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-attachment-failure-'));
+  const files = new AttachmentFiles(path.join(folder, 'outgoing'));
+  const imageSource = path.join(folder, 'source.png'), videoSource = path.join(folder, 'source.mp4');
+  await fs.writeFile(imageSource, png); await fs.writeFile(videoSource, videoBytes);
+  const preserved = await files.stage(png, 'existing.png');
+  const baseline = new Set(await fs.readdir(files.folder));
+  const originalWrite = mutableFs.writeFile, originalCopy = mutableFs.copyFile;
+  const originalStat = mutableFs.stat, originalRename = mutableFs.rename;
+  const failure = Object.assign(new Error('injected attachment I/O failure'), { code: 'EIO' });
+  const rejected = async (create: () => Promise<unknown>) => {
+    await assert.rejects(create, error => error === failure);
+    assert.deepEqual(new Set(await fs.readdir(files.folder)), baseline);
+    assert.deepEqual(await fs.readFile(preserved.file!), png);
+  };
+  const recovered = async () => {
+    const attachment = await files.stageAuto(png, 'recovered.png');
+    assert.deepEqual(await files.read(attachment), png);
+    assert.equal((await fs.readdir(files.folder)).length, baseline.size + 1);
+    await files.discard([attachment]);
+  };
+  try {
+    await t.test('image/file write fails after creating a partial target', async t => {
+      const fault = t.mock.method(mutableFs, 'writeFile', async (...args: Parameters<typeof mutableFs.writeFile>) => {
+        if (path.dirname(String(args[0])) !== files.folder) return originalWrite(...args);
+        await originalWrite(args[0], Buffer.from('partial')); throw failure;
+      });
+      await rejected(() => files.stage(png, 'image.png'));
+      await rejected(() => files.stageFile(Buffer.from('document'), 'document.txt'));
+      await rejected(() => files.stageAuto(videoBytes, 'video.mp4'));
+      fault.mock.restore(); await recovered();
+    });
+    await t.test('file copy fails after creating a partial target', async t => {
+      const fault = t.mock.method(mutableFs, 'copyFile', async (...args: Parameters<typeof mutableFs.copyFile>) => {
+        if (path.dirname(String(args[1])) !== files.folder) return originalCopy(...args);
+        await originalWrite(args[1], Buffer.from('partial')); throw failure;
+      });
+      await rejected(() => files.stageFilePath(imageSource, 'image.png'));
+      await rejected(() => files.stageAutoPath(imageSource, 'image.png'));
+      fault.mock.restore(); await recovered();
+    });
+    await t.test('target stat fails after the copy completes', async t => {
+      const fault = t.mock.method(mutableFs, 'stat', async (...args: Parameters<typeof mutableFs.stat>) => {
+        if (path.dirname(String(args[0])) === files.folder) throw failure;
+        return originalStat(...args);
+      });
+      await rejected(() => files.stageFilePath(imageSource, 'image.png'));
+      fault.mock.restore(); await recovered();
+    });
+    await t.test('image/video rename failure cleans both possible names', async t => {
+      let moved = false;
+      const fault = t.mock.method(mutableFs, 'rename', async (...args: Parameters<typeof mutableFs.rename>) => {
+        if (path.dirname(String(args[0])) !== files.folder) return originalRename(...args);
+        assert.ok((await originalStat(args[0])).isFile());
+        if (moved) await originalRename(...args);
+        throw failure;
+      });
+      for (moved of [false, true]) {
+        await rejected(() => files.stageAuto(videoBytes, 'video.mp4'));
+        await rejected(() => files.stageAutoPath(imageSource, 'image.png'));
+        await rejected(() => files.stageAutoPath(videoSource, 'video.mp4'));
+      }
+      fault.mock.restore(); await recovered();
+    });
+    assert.deepEqual(await fs.readFile(imageSource), png);
+    assert.deepEqual(await fs.readFile(videoSource), videoBytes);
+    assert.deepEqual(new Set(await fs.readdir(files.folder)), baseline);
+  } finally { await fs.rm(folder, { recursive: true, force: true }); }
 });

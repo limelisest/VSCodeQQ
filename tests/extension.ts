@@ -20,6 +20,7 @@ import { testDraftRestore } from './draftRestoreExtension';
 import { testLinkUpdates } from './linkUpdatesExtension';
 import { testListSearch, testListActive } from './listSearchExtension';
 import { testSlashCommands } from './slashExtension';
+import { testMessageNotifications } from './notificationExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
 import { testEmojiPreviews } from './emojiPreviewExtension';
 import { testEmojiOpenModes } from './emojiModeExtension';
@@ -69,6 +70,12 @@ export async function run(): Promise<void> {
     await until(() => settingsReady);
     checks.push('连接设置页面入口、输入校验、Token 保留/清除/不回传、独立测试连接');
     await app.settings.handle({ action: 'connect', ...form, token: '', clearToken: true }); assert.equal(app.ready, true); checks.push('设置页保存并连接、NapCat 握手与会话列表');
+    if (process.env.QQ_TEST_NOTIFICATIONS_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testMessageNotifications(app, backend, ui, checks);
+      console.log(`QQ notification integration: ${checks.length} checks passed`); return;
+    }
     if (process.env.QQ_TEST_PERMISSIONS_ONLY === '1') {
       ui = await TestUI.connect(); await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -1146,6 +1153,7 @@ export async function run(): Promise<void> {
     console.log('Forward integration: passed');
     await testSlashCommands(app, backend, ui, checks);
     await testPermissions(app, backend, ui, checks);
+    await testMessageNotifications(app, backend, ui, checks);
     await app.store!.flush();
     await fs.writeFile(path.join(output, 'extension-result.json'), JSON.stringify({ passed: checks, simulatedSends: backend.sent.length, realSends: 0 }, null, 2));
     console.log(`QQ extension integration: ${checks.length} checks passed`);

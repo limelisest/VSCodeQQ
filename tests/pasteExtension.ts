@@ -26,11 +26,12 @@ export async function testPaste(app: QQApp, backend: MockNapCat, ui: TestUI, che
     asFile: () => ({ name: 'clipboard.png', uri, data: async () => png }),
     asString: async () => ''
   }) as unknown as vscode.DataTransferItem;
-  const importData = async (data: vscode.DataTransfer, expected = png) => {
+  const importData = async (data: vscode.DataTransfer, expected = png, mode: 'paste' | 'drop' = 'paste') => {
     const editor = await reset(), pos = editor.selection.active;
-    const edits = await app.native.paste(editor.document, [new vscode.Range(pos, pos)], data, cancellation.token);
-    assert.ok(edits?.length);
-    assert.equal(await editor.edit(edit => edit.insert(pos, String(edits[0].insertText))), true);
+    const imported = mode === 'drop' ? await app.native.drop(editor.document, pos, data, cancellation.token)
+      : (await app.native.paste(editor.document, [new vscode.Range(pos, pos)], data, cancellation.token))?.[0];
+    assert.ok(imported);
+    assert.equal(await editor.edit(edit => edit.insert(pos, String(imported.insertText))), true);
     await until(() => !app.native.isImporting(editor.document));
     const draft = app.store!.draft(key);
     assert.match(draft.text, /^\[图片:\d+\]$/);
@@ -80,6 +81,74 @@ export async function testPaste(app: QQApp, backend: MockNapCat, ui: TestUI, che
     await importData(unavailableFile);
     checks.push('剪贴板文件项失效时仍能使用独立的 PNG 数据');
 
+    let readable = true;
+    const temporary = new vscode.DataTransfer();
+    temporary.set('image/png', {
+      asFile: () => ({ name: 'temporary.png', data: async () => {
+        assert.equal(readable, true, 'start reading transient File data before awaiting metadata'); return png;
+      } }),
+      asString: async () => ''
+    } as unknown as vscode.DataTransferItem);
+    temporary.set('text/uri-list', {
+      asFile: () => undefined, asString: async () => { readable = false; return ''; }
+    } as unknown as vscode.DataTransferItem);
+    await importData(temporary, png, 'drop');
+    checks.push('拖入时先捕获临时 File 数据，再读取异步路径元数据');
+
+    const unavailableImage = {
+      asFile: () => ({ name: 'expired.png', data: async () => {
+        throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
+      } }),
+      asString: async () => ''
+    } as unknown as vscode.DataTransferItem;
+    const htmlFallback = new vscode.DataTransfer();
+    htmlFallback.set('image/png', unavailableImage);
+    htmlFallback.set('text/html', new vscode.DataTransferItem(`<img src="${vscode.Uri.file(present)}">`));
+    await importData(htmlFallback, png, 'drop');
+    checks.push('外部拖入的 File 报 NotFoundError 时读取同次传入的 HTML 图片来源');
+
+    htmlFallback.set('image/png', imageItem());
+    htmlFallback.set('text/html', new vscode.DataTransferItem(`<img src="${vscode.Uri.file(gifPath)}">`));
+    await importData(htmlFallback, gif);
+    checks.push('HTML 带可读 GIF 原图时保留动图，不以 PNG 预览替代');
+
+    const inlineFallback = new vscode.DataTransfer(), opaquePath = vscode.Uri.file(path.join(folder, 'external-cache.dat'));
+    inlineFallback.set('text/uri-list', new vscode.DataTransferItem(opaquePath.toString()));
+    inlineFallback.set('image/png', {
+      asFile: () => ({ name: 'external-cache.dat', uri: opaquePath, data: async () => {
+        throw new DOMException('A requested file or directory could not be found at the time an operation was processed.', 'NotFoundError');
+      } }),
+      asString: async () => ''
+    } as unknown as vscode.DataTransferItem);
+    inlineFallback.set('text/html', new vscode.DataTransferItem(`<img src="data:image/png;base64,${png.toString('base64')}">`));
+    await importData(inlineFallback, png, 'drop');
+    checks.push('无图片后缀的临时路径与 File 均失效时，根据 MIME 读取同次 HTML 内嵌图片');
+
+    const preferredEncoding = new vscode.DataTransfer();
+    preferredEncoding.set('image/gif', {
+      asFile: () => ({ name: 'clipboard.gif', data: async () => gif }), asString: async () => ''
+    } as unknown as vscode.DataTransferItem);
+    preferredEncoding.set('image/png', imageItem());
+    await importData(preferredEncoding);
+    checks.push('多个图片编码的插入顺序不改变 PNG 优先级，且只导入一份');
+
+    const encodings = new vscode.DataTransfer();
+    encodings.set('image/png', unavailableImage); encodings.set('image/bmp', imageItem());
+    await importData(encodings);
+    checks.push('首选 PNG 编码失效时尝试其它图片编码，只导入一份');
+
+    const broken = new vscode.DataTransfer(); broken.set('image/png', unavailableImage);
+    editor = await reset('保留草稿');
+    const beforeBroken = new Set(await fs.readdir(app.attachments!.folder)), brokenPos = editor.selection.active;
+    const brokenEdits = await app.native.paste(editor.document, [new vscode.Range(brokenPos, brokenPos)], broken, cancellation.token);
+    assert.equal(brokenEdits?.[0].insertText, '');
+    assert.equal(app.native.draft(editor.document), '保留草稿');
+    assert.equal(app.store!.draft(key).attachments.length, 0);
+    assert.deepEqual(new Set(await fs.readdir(app.attachments!.folder)), beforeBroken);
+    await ui.waitFor(`document.body.textContent.includes('粘贴失败')`);
+    await vscode.commands.executeCommand('notifications.clearAll');
+    checks.push('所有传入来源均失效时报告失败，保留草稿且不残留附件');
+
     const html = new vscode.DataTransfer();
     html.set('text/plain', new vscode.DataTransferItem(present));
     html.set('text/html', new vscode.DataTransferItem(`<img src="${vscode.Uri.file(present)}">`));
@@ -92,6 +161,7 @@ export async function testPaste(app: QQApp, backend: MockNapCat, ui: TestUI, che
     const multiple = new vscode.DataTransfer();
     multiple.set('text/uri-list', new vscode.DataTransferItem([present, missing].map(file => vscode.Uri.file(file).toString()).join('\r\n')));
     multiple.set('image/png', imageItem());
+    multiple.set('text/html', html.get('text/html')!);
     const cached = new Set(await fs.readdir(app.attachments!.folder)), pos = editor.selection.active;
     const failed = await app.native.paste(editor.document, [new vscode.Range(pos, pos)], multiple, cancellation.token);
     assert.equal(failed?.[0].insertText, '');

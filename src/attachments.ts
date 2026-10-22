@@ -19,25 +19,32 @@ export class AttachmentFiles {
     const ext = imageExtension(bytes); if (!ext) throw new Error('请选择 PNG、JPEG、GIF、WebP 或 BMP 图片');
     await fs.mkdir(this.folder, { recursive: true });
     const id = randomUUID(), file = path.join(this.folder, id + ext);
-    await fs.writeFile(file, bytes);
-    return { id, kind: 'image', label, file, sticker };
+    try {
+      await fs.writeFile(file, bytes);
+      return { id, kind: 'image', label, file, sticker };
+    } catch (error) { await fs.unlink(file).catch(() => {}); throw error; }
   }
   async stageFile(bytes: Buffer, name: string): Promise<Attachment> {
     const label = name.split(/[\\/]/).pop()?.replace(/[\r\n\0]/g, ' ') || '文件';
     const id = randomUUID(), file = path.join(this.folder, id + '.attachment');
     await fs.mkdir(this.folder, { recursive: true });
-    await fs.writeFile(file, bytes);
-    return { id, kind: 'file', label, file, size: bytes.length };
+    try {
+      await fs.writeFile(file, bytes);
+      return { id, kind: 'file', label, file, size: bytes.length };
+    } catch (error) { await fs.unlink(file).catch(() => {}); throw error; }
   }
   async stageAuto(bytes: Buffer, name: string): Promise<Attachment> {
     if (imageExtension(bytes)) return this.stage(bytes, name);
     const attachment = await this.stageFile(bytes, name);
     const ext = videoExtension(bytes);
-    return ext ? this.videoFile(attachment, ext) : attachment;
+    return ext ? this.mediaFile(attachment, 'video', ext) : attachment;
   }
-  private async videoFile(attachment: Attachment, ext: string): Promise<Attachment> {
+  private async mediaFile(attachment: Attachment, kind: 'image' | 'video', ext: string): Promise<Attachment> {
     const file = path.join(this.folder, attachment.id + ext);
-    await fs.rename(attachment.file!, file); return { ...attachment, kind: 'video', file };
+    try {
+      await fs.rename(attachment.file!, file);
+      return { ...attachment, kind, file };
+    } catch (error) { await this.discard([attachment, { ...attachment, file }]); throw error; }
   }
   async stageAutoPath(source: string, name: string): Promise<Attachment> {
     const stat = await fs.stat(source);
@@ -47,12 +54,10 @@ export class AttachmentFiles {
     let length: number;
     try { length = (await handle.read(header, 0, header.length, 0)).bytesRead; } finally { await handle.close(); }
     const video = videoExtension(header.subarray(0, length));
-    if (video) return this.videoFile(await this.stageFilePath(source, name), video);
-    if (!imageExtension(header.subarray(0, length))) return this.stageFilePath(source, name);
-    const ext = imageExtension(header.subarray(0, length))!;
-    const attachment = await this.stageFilePath(source, name);
-    const file = path.join(this.folder, attachment.id + ext);
-    await fs.rename(attachment.file!, file); return { ...attachment, kind: 'image', file };
+    if (video) return this.mediaFile(await this.stageFilePath(source, name), 'video', video);
+    const image = imageExtension(header.subarray(0, length));
+    if (!image) return this.stageFilePath(source, name);
+    return this.mediaFile(await this.stageFilePath(source, name), 'image', image);
   }
   async stageFilePath(source: string, name: string): Promise<Attachment> {
     const stat = await fs.stat(source);
@@ -60,9 +65,11 @@ export class AttachmentFiles {
     if (!stat.size) throw new Error('不能发送空文件');
     const id = randomUUID(), file = path.join(this.folder, id + '.attachment');
     await fs.mkdir(this.folder, { recursive: true });
-    await fs.copyFile(source, file);
-    const size = (await fs.stat(file)).size;
-    return { id, kind: 'file', label: name, file, size };
+    try {
+      await fs.copyFile(source, file);
+      const size = (await fs.stat(file)).size;
+      return { id, kind: 'file', label: name, file, size };
+    } catch (error) { await fs.unlink(file).catch(() => {}); throw error; }
   }
   async filePath(attachment: Attachment): Promise<string> {
     if (!attachment.file || path.dirname(path.resolve(attachment.file)) !== path.resolve(this.folder)) throw new Error('附件路径无效');

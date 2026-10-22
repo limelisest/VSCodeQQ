@@ -2,6 +2,27 @@ import { Chat } from './model';
 import { ChatStore } from './store';
 import { OneBotClient } from './onebot';
 
+// Count display cells without splitting emoji, combining marks or other grapheme clusters.
+const segments = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+function previewText(value: string, limit: number): string {
+  // Native notification links are parsed even in plain strings. Keep QQ text literal.
+  const text = value.replace(/\s+/g, ' ').trim().replace(/\[/g, '［').replace(/\]/g, '］');
+  const parts: { text: string; width: number }[] = [];
+  let width = 0;
+  for (const { segment } of segments.segment(text)) {
+    const size = /^[\x00-\x7f]+$/.test(segment) ? segment.length : 2;
+    if (width + size > limit) {
+      while (width + 1 > limit) width -= parts.pop()!.width;
+      return parts.map(part => part.text).join('') + '…';
+    }
+    parts.push({ text: segment, width: size }); width += size;
+  }
+  return parts.map(part => part.text).join('');
+}
+export function notificationPreview(chat: string, reason: string, body: string): string {
+  return previewText(`${previewText(chat, 20)} · ${reason}：${body}`, 72);
+}
+
 export function groupNotification(data: any): NonNullable<Chat['notification']> {
   // NapCat GroupDetailInfo.cmdUinMsgMask / QQ GroupMsgMask, not group_all_shut (a speaking ban).
   const mask = data?.cmdUinMsgMask;

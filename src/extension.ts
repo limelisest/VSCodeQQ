@@ -33,7 +33,8 @@ import { downloadFile } from './download';
 import { OutboxService, Submission } from './outbox';
 import { AccountSession } from './accountSession';
 import { OperationLocks } from './operationLocks';
-import { NotificationSync, allowsUnread, allowsMessageNotification, countedUnread } from './notifications';
+import { MessageNotifications } from './messageNotifications';
+import { NotificationSync, allowsUnread, allowsMessageNotification, countedUnread, notificationPreview } from './notifications';
 import { ChatEditorController } from './chatEditorController';
 import { Attachment, Chat, Message, id, messageText, newChat, parseMessage, splitKey } from './model';
 
@@ -60,6 +61,7 @@ export class QQApp implements vscode.Disposable {
   notifications?: NotificationSync;
   private profiles?: PrivateChatProfiles;
   private notificationTimer?: NodeJS.Timeout;
+  private messageNotifications = new MessageNotifications(error => this.log(error));
   store?: ChatStore;
   transcript?: Transcript;
   attachments?: AttachmentFiles;
@@ -103,6 +105,7 @@ export class QQApp implements vscode.Disposable {
     this.disposables.push(vscode.workspace.onDidChangeConfiguration(e => {
       if (e.affectsConfiguration('qq')) {
         this.settingsTree.refresh();
+        if (e.affectsConfiguration('qq.notifications') && vscode.workspace.getConfiguration('qq').get('notifications') === 'off') this.messageNotifications.clear();
         if (e.affectsConfiguration('qq.statusBarButtons')) this.refreshStatusButtons();
         if (Object.keys(reminderColors).some(key => e.affectsConfiguration('qq.' + key))) { this.editor.refreshHighlights(); void syncReminderColors().catch(error => this.log(error)); this.trees.forEach(tree => tree.refresh()); this.tabs.refresh(); }
         if (this.store) this.store.limit = this.config.messageLimit;
@@ -120,7 +123,7 @@ export class QQApp implements vscode.Disposable {
       onDidChangeFileDecorations: this.tabChanges.event,
       provideFileDecoration: uri => this.tabDecoration(uri)
     }));
-    this.disposables.push(this.output, this.status);
+    this.disposables.push(this.output, this.status, this.messageNotifications);
     const selector = { scheme: 'qqchat', language: 'qq-chat' };
     this.disposables.push(vscode.languages.registerCompletionItemProvider(selector, this.emojiCompletion, '!', '！'));
     this.disposables.push(vscode.languages.registerCompletionItemProvider(selector, {
@@ -274,7 +277,7 @@ export class QQApp implements vscode.Disposable {
     this.profiles = undefined;
     clearTimeout(this.initializationRetry);
     this.session.advance(); this.historyQueue.clear(); this.historyLoaded.clear(); this.ready = false; this.queued = [];
-    this.slash.clearResults(); this.forwards.clear();
+    this.slash.clearResults(); this.forwards.clear(); this.messageNotifications.clear();
     this.notifications?.dispose(); clearInterval(this.notificationTimer); this.updateStatus('未连接');
   }
   private async connectOnce(): Promise<void> {
@@ -377,6 +380,7 @@ export class QQApp implements vscode.Disposable {
     await this.session.bind(async () => {
       if (!token.current() || this.stopped || this.store?.selfId === selfId) return;
       if (this.store) {
+        this.messageNotifications.clear();
         const oldStore = this.store; this.store = undefined;
         this.notifications?.dispose(); this.transcript?.dispose(); this.transcript = undefined;
         await oldStore.dispose();
@@ -509,8 +513,7 @@ export class QQApp implements vscode.Disposable {
     const mode = vscode.workspace.getConfiguration('qq').get<string>('notifications', 'all');
     if (mode === 'off' || (mode === 'mentions' && !message.mentioned && !replyToSelf)) return;
     const reason = message.mentioned ? '有人 @你' : replyToSelf ? '有人回复你' : '新消息';
-    const choice = await vscode.window.showInformationMessage(`${chat.name} · ${reason}：${messageText(message).replace(/\s+/g, ' ').slice(0, 100)}`, '查看');
-    if (choice === '查看' && store === this.store) await this.openChat(key);
+    this.messageNotifications.show(store.selfId, key, notificationPreview(chat.name, reason, messageText(message)));
   }
   async openChat(input: string | Chat): Promise<void> {
     const key = typeof input === 'string' ? input : input.key;
@@ -731,6 +734,9 @@ export class QQApp implements vscode.Disposable {
     register('qq.importConfig', async () => { if (await this.config.import()) await this.connect(); }, () => 'config');
     register('qq.refresh', () => this.ready ? this.refresh() : this.connect(), () => 'lists');
     register('qq.openChat', (item: string | Chat) => this.openChat(item));
+    register('qq.openNotification', (account: string, key: string) => {
+      if (this.store?.selfId === account && this.store.chats.has(key)) return this.openChat(key);
+    });
     register('qq.toggleCollapsed', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleCollapsed(key); });
     register('qq.toggleFavorite', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleFavorite(key); });
     register('qq.markRead', async (item?: Chat | string) => {
