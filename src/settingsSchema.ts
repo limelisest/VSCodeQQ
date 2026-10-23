@@ -1,10 +1,10 @@
 import { codeLanguages } from './codeStyle';
 export const languageLabels = { c: 'C', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', dart: 'Dart', kotlin: 'Kotlin', java: 'Java', swift: 'Swift' } as const;
 export const draftActions = {
-  emojis: { label: '表情', command: 'qq.emojis', arguments: [{ autoClose: true }] },
-  image: { label: '图片', command: 'qq.insertImage' },
-  file: { label: '文件', command: 'qq.insertFile' },
-  forward: { label: '转发', command: 'qq.forwardMessage' }
+  emojis: { label: '表情', icon: 'smiley', command: 'qq.emojis', arguments: [{ autoClose: true }] },
+  image: { label: '图片', icon: 'file-media', command: 'qq.insertImage' },
+  file: { label: '文件', icon: 'file', command: 'qq.insertFile' },
+  forward: { label: '转发', icon: 'share', command: 'qq.forwardMessage' }
 } as const;
 export const reminderColors = {
   mentionColor: { label: '@我', default: '#E5A030' }, replyColor: { label: '回复我', default: '#409CFF' },

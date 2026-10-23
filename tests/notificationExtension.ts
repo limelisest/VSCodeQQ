@@ -24,13 +24,14 @@ export async function testMessageNotifications(app: QQApp, backend: MockNapCat, 
     const preview = await ui.evaluate(`(() => {
       const item = (${selector}), message = item.querySelector('.notification-list-item-message');
       const style = getComputedStyle(message);
-      return { text: item.textContent, height: message.getBoundingClientRect().height, lineHeight: parseFloat(style.lineHeight), links: [...message.querySelectorAll('a')].map(link => link.getAttribute('href')) };
+      return { text: item.textContent, messageText: message.textContent, linkText: message.querySelector('a')?.textContent, height: message.getBoundingClientRect().height, lineHeight: parseFloat(style.lineHeight), links: [...message.querySelectorAll('a')].map(link => link.getAttribute('href')) };
     })()`);
     assert.ok(!preview.text.includes('hidden-full-message-tail'));
     assert.ok(preview.text.includes('…'));
     assert.ok(preview.height <= preview.lineHeight * 2, 'default notification preview stays compact');
     assert.equal(preview.links.length, 1);
     assert.ok(preview.links[0].startsWith('command:qq.openChat?'));
+    assert.equal(preview.linkText, preview.messageText, '整段通知摘要都属于同一个会话链接');
     // This unrelated sticky error must survive the QQ notification's timer.
     void vscode.window.showErrorMessage('unrelated-notification-probe', '保留');
     await ui.waitFor(`document.querySelector('.notifications-toasts')?.textContent.includes('unrelated-notification-probe')`);
@@ -49,7 +50,7 @@ export async function testMessageNotifications(app: QQApp, backend: MockNapCat, 
     assert.equal(vscode.window.activeTextEditor?.document, code);
     await (app as any).notifyMessage(store, message);
     await ui.waitFor(`!!(${selector})`);
-    const link = await ui.evaluate(`(() => {const link=(${selector}).querySelector('.notification-list-item-message a'), r=link.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    const link = await ui.evaluate(`(() => {const link=(${selector}).querySelector('.notification-list-item-message a'), r=[...link.getClientRects()].find(r=>r.width>0 && r.height>0); return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...link, button: 'left', clickCount: 1 });
     await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...link, button: 'left', clickCount: 1 });
     await until(() => app.transcript?.key(vscode.window.activeTextEditor!.document.uri) === key);
@@ -57,22 +58,23 @@ export async function testMessageNotifications(app: QQApp, backend: MockNapCat, 
     // toast is opened in the notification center, without relying on a target.
     await vscode.commands.executeCommand('notifications.clearAll');
     await app.openChat('group:20002');
-    store.add(parseMessage({ ...backend.message(99181, probe + '-from-chat'), message_type: 'private', group_id: undefined }, key, store.selfId), true);
+    store.add(parseMessage({ ...backend.message(99181, probe + '-from-chat [原文](command:qq.disconnect) \\'), message_type: 'private', group_id: undefined }, key, store.selfId), true);
     await (app as any).notifyMessage(store, store.messages.get(key)!.find(message => message.id === '99181')!);
     await ui.waitFor(`!!(${selector})`);
     const publicLink = await ui.evaluate(`(${selector}).querySelector('a').getAttribute('href')`);
+    assert.equal(await ui.evaluate(`(${selector}).querySelectorAll('.notification-list-item-message a').length`), 1, '正文中的命令样式文本不产生额外链接');
     const args = JSON.parse(decodeURIComponent(publicLink.slice(publicLink.indexOf('?') + 1)));
     assert.deepEqual(args, [{ account: store.selfId, key }]);
     await vscode.commands.executeCommand('notifications.showList');
     const centerSelector = `Array.from(document.querySelectorAll('.notifications-center .notification-list-item')).find(el => el.textContent.includes('${probe}-from-chat'))`;
     await ui.waitFor(`!!(${centerSelector})`);
-    const centerLink = await ui.evaluate(`(() => {const r=(${centerSelector}).querySelector('a').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    const centerLink = await ui.evaluate(`(() => {const r=[...(${centerSelector}).querySelector('a').getClientRects()].filter(r=>r.width>0 && r.height>0).at(-1);return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await ui.call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...centerLink });
     await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...centerLink, button: 'left', clickCount: 1 });
     await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...centerLink, button: 'left', clickCount: 1 });
     await until(() => app.transcript?.key(vscode.window.activeTextEditor!.document.uri) === key);
     await vscode.commands.executeCommand('notifications.hideList');
-    checks.push('通知与列表共用公开的打开会话命令，从其他会话和通知中心真实点击都打开通知绑定会话');
+    checks.push('通知整段摘要均可点击，首行与末行文字真实点击都打开绑定会话；正文中的命令样式文本不生成额外入口');
     await config.update('notifications', 'off', vscode.ConfigurationTarget.Global);
     await ui.waitFor(`!(${selector})`);
     checks.push('通知查看链接仅打开当前账号会话；关闭弹窗配置立即移除本扩展已有通知');

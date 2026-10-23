@@ -9,7 +9,7 @@ import { TestUI } from './ui';
 import { DRAFT_DIVIDER } from '../src/nativeEditor';
 
 async function clickDraftAction(ui: TestUI, label: string): Promise<void> {
-  const point = await ui.waitFor(`(() => {const el=[...document.querySelectorAll('.editor-group-container.active .codelens-decoration a')].find(el=>el.textContent.trim()===${JSON.stringify(label)} && el.getBoundingClientRect().width>0);if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  const point = await ui.waitFor(`(() => {const el=[...document.querySelectorAll('.editor-group-container.active .codelens-decoration a')].find(el=>el.textContent.trim()===${JSON.stringify(label)} && el.getBoundingClientRect().width>0);if(!el)return null;const r=(el.querySelector('.codicon')??el).getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
   await ui.call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
   await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
   await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
@@ -63,7 +63,7 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     const editor = vscode.window.activeTextEditor!;
     await ui.waitFor(`(${buttons}).length === 1`);
     assert.equal(app.editor.provideCodeLenses(editor.document).find(lens => lens.command?.command === 'qq.previousAttention')!.range.start.line, editor.document.positionAt(app.native.region(editor.document)!.start).line - 1);
-    assert.deepEqual(app.editor.provideCodeLenses(editor.document).map(lens => lens.command!.title), ['表情', '图片', '文件', '转发', '↑ 上一个 @ 或回复']);
+    assert.deepEqual(app.editor.provideCodeLenses(editor.document).map(lens => lens.command!.title.replace(/\$\([^)]+\)\s*/g, '')), ['表情', '图片', '文件', '转发', '↑ 上一个 @ 或回复']);
     await ui.waitFor(`(() => { const jump=(${buttons})[0], links=[...jump.parentElement.querySelectorAll('a')]; return links.map(el=>el.textContent.trim()).join('|')==='表情|图片|文件|转发|↑ 上一个 @ 或回复'; })()`);
     assert.ok(!editor.document.getText().includes(label), '提示不写入聊天文本或草稿');
     assert.equal(await ui.evaluate(`(${buttons})[0].textContent.trim().endsWith(${JSON.stringify(label)})`), true);
@@ -213,9 +213,12 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     assert.deepEqual(config.get('statusBarButtons'), ['emojis', 'image', 'file', 'forward']);
     await app.openChat('group:20002');
     await ui.waitFor(`${buttonVisible('emojis')} && ${buttonVisible('image')} && ${buttonVisible('file')} && ${buttonVisible('forward')}`);
+    for (const icon of ['smiley', 'file-media', 'file', 'share']) {
+      await ui.waitFor(`(() => {const el=document.querySelector('.editor-group-container.active .codelens-decoration .codicon-${icon}');return el?.getBoundingClientRect().width>0 && !['none','\"\"'].includes(getComputedStyle(el,'::before').content);})()`);
+    }
     const lenses = app.editor.provideCodeLenses(vscode.window.activeTextEditor!.document);
-    assert.equal(lenses.find(lens => lens.command?.title === '图片')?.command?.command, 'qq.insertImage');
-    assert.equal(lenses.find(lens => lens.command?.title === '文件')?.command?.command, 'qq.insertFile');
+    assert.equal(lenses.find(lens => lens.command?.title.endsWith(' 图片'))?.command?.command, 'qq.insertImage');
+    assert.equal(lenses.find(lens => lens.command?.title.endsWith(' 文件'))?.command?.command, 'qq.insertFile');
     await ui.waitFor(`!!document.querySelector('[id$="qq.status.latest"]') && !document.querySelector('[id$="qq.status.emojis"]') && !document.querySelector('[id$="qq.status.image"]')`);
     const latestPoint = await ui.evaluate(`(() => {const r=document.querySelector('[id$="qq.status.latest"]').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     app.editor.follow(vscode.window.activeTextEditor!, false);

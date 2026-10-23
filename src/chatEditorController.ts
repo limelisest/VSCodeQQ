@@ -145,7 +145,7 @@ export class ChatEditorController implements vscode.Disposable {
     const draftLine = doc.positionAt(region.start).line - 1, uri = doc.uri.toString();
     const selected = vscode.workspace.getConfiguration('qq').get<string[]>('statusBarButtons', ['emojis', 'image', 'file', 'forward']);
     const lenses = Object.entries(draftActions).filter(([key]) => selected.includes(key)).map(([key, entry]) => new vscode.CodeLens(new vscode.Range(draftLine, 0, draftLine, 0), {
-      title: entry.label, command: entry.command,
+      title: `$(${entry.icon}) ${entry.label}`, tooltip: entry.label, command: entry.command,
       arguments: key === 'image' || key === 'file' ? [uri] : 'arguments' in entry ? [...entry.arguments] : []
     }));
     const target = this.host.store?.unseenAttention(key).at(-1);
