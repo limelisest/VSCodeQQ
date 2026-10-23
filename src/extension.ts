@@ -514,8 +514,8 @@ export class QQApp implements vscode.Disposable {
     if (!message.mentioned && !replyToSelf && this.isReading(key)) return;
     const mode = vscode.workspace.getConfiguration('qq').get<string>('notifications', 'all');
     if (mode === 'off' || (mode === 'mentions' && !message.mentioned && !replyToSelf)) return;
-    const reason = message.mentioned ? '有人 @你' : replyToSelf ? '有人回复你' : '新消息';
-    this.messageNotifications.show(store.selfId, key, notificationPreview(chat.name, reason, messageText(message)));
+    const sender = store.displayMessages(key).find(item => item.id === message.id)?.senderName || message.senderName;
+    this.messageNotifications.show(store.selfId, key, notificationPreview(sender, messageText(message)));
   }
   async openChat(input: string | Chat | { account: string; key: string }): Promise<void> {
     const key = typeof input === 'string' ? input : input.key;

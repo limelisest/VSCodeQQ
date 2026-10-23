@@ -63,8 +63,8 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     const editor = vscode.window.activeTextEditor!;
     await ui.waitFor(`(${buttons}).length === 1`);
     assert.equal(app.editor.provideCodeLenses(editor.document).find(lens => lens.command?.command === 'qq.previousAttention')!.range.start.line, editor.document.positionAt(app.native.region(editor.document)!.start).line - 1);
-    assert.deepEqual(app.editor.provideCodeLenses(editor.document).map(lens => lens.command!.title.replace(/\$\([^)]+\)\s*/g, '')), ['表情', '图片', '文件', '转发', '↑ 上一个 @ 或回复']);
-    await ui.waitFor(`(() => { const jump=(${buttons})[0], links=[...jump.parentElement.querySelectorAll('a')]; return links.map(el=>el.textContent.trim()).join('|')==='表情|图片|文件|转发|↑ 上一个 @ 或回复'; })()`);
+    assert.deepEqual(app.editor.provideCodeLenses(editor.document).map(lens => lens.command!.title.replace(/\$\([^)]+\)\s*/g, '')), ['表情', '图片', '文件', '转发', '发送', '↑ 上一个 @ 或回复']);
+    await ui.waitFor(`(() => { const jump=(${buttons})[0], links=[...jump.parentElement.querySelectorAll('a')]; return links.map(el=>el.textContent.trim()).join('|')==='表情|图片|文件|转发|发送|↑ 上一个 @ 或回复'; })()`);
     assert.ok(!editor.document.getText().includes(label), '提示不写入聊天文本或草稿');
     assert.equal(await ui.evaluate(`(${buttons})[0].textContent.trim().endsWith(${JSON.stringify(label)})`), true);
     await click();
@@ -144,7 +144,7 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
 
 async function testDraftSend(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[], code: vscode.TextDocument): Promise<void> {
   const store = app.store!, key = 'group:20002'; await app.openChat(key);
-  const editor = vscode.window.activeTextEditor!;
+  let editor = vscode.window.activeTextEditor!;
   store.setDraft(key, '分界线发送验收', undefined, []); await app.native.sync(editor);
   const dividerLine = editor.document.positionAt(app.native.region(editor.document)!.start).line - 1;
   assert.equal(editor.document.lineAt(dividerLine).text, DRAFT_DIVIDER);
@@ -153,14 +153,28 @@ async function testDraftSend(app: QQApp, backend: MockNapCat, ui: TestUI, checks
   await vscode.window.showTextDocument(code); await vscode.commands.executeCommand('qq.send', uri);
   assert.equal(backend.sent.length, sent); assert.equal(store.draft(key).text, '分界线发送验收');
   await app.focusInput();
+  editor = vscode.window.activeTextEditor!;
   await until(() => !app.native.isUpdating(editor.document) && app.native.historyMatches(editor.document));
   await ui.waitFor(`document.querySelector('.editor-group-container.active .view-lines')?.textContent.includes('分界线发送验收')`);
-  await ui.enter();
+  const sendLink = app.editor.provideCodeLenses(editor.document).find(lens => lens.command?.command === 'qq.send')!;
+  assert.equal(sendLink.range.start.line, dividerLine);
+  assert.deepEqual(sendLink.command!.arguments, [uri]);
+  await clickDraftAction(ui, '发送');
   await until(() => backend.sent.length === sent + 1 && store.draft(key).text === '' && !app.native.isUpdating(editor.document));
   assert.equal(backend.sent.at(-1).message[0].data.text, '分界线发送验收');
-  await ui.enter(); await new Promise(resolve => setTimeout(resolve, 400));
+  await clickDraftAction(ui, '发送'); await new Promise(resolve => setTimeout(resolve, 400));
   assert.equal(backend.sent.length, sent + 1);
-  checks.push('分界线仅显示发送换行提示，Enter 实际发送草稿，空草稿不重复提交，旧会话参数不能跨文档发送');
+  store.setDraft(key, '/help'); await app.native.sync(editor); await app.focusInput();
+  await until(() => !app.native.isUpdating(editor.document));
+  await clickDraftAction(ui, '发送');
+  await until(() => backend.sent.length === sent + 2 && store.draft(key).text === '' && !app.native.isUpdating(editor.document));
+  assert.equal(backend.sent.at(-1).message[0].data.text, '/help', '点击发送仍把直接输入的指令作为普通文字');
+  store.setDraft(key, 'Enter 发送验收'); await app.native.sync(editor); await app.focusInput();
+  await until(() => !app.native.isUpdating(editor.document));
+  await ui.enter();
+  await until(() => backend.sent.length === sent + 3 && store.draft(key).text === '' && !app.native.isUpdating(editor.document));
+  assert.equal(backend.sent.at(-1).message[0].data.text, 'Enter 发送验收');
+  checks.push('草稿上方发送图标实际单击可发送，空草稿不重复提交；直接输入 /help 后点击发送仍按普通文字发送，Enter 和会话校验保持正常');
 }
 
 async function testFileSelection(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
@@ -213,7 +227,7 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     assert.deepEqual(config.get('statusBarButtons'), ['emojis', 'image', 'file', 'forward']);
     await app.openChat('group:20002');
     await ui.waitFor(`${buttonVisible('emojis')} && ${buttonVisible('image')} && ${buttonVisible('file')} && ${buttonVisible('forward')}`);
-    for (const icon of ['smiley', 'file-media', 'file', 'share']) {
+    for (const icon of ['smiley', 'file-media', 'file', 'share', 'send']) {
       await ui.waitFor(`(() => {const el=document.querySelector('.editor-group-container.active .codelens-decoration .codicon-${icon}');return el?.getBoundingClientRect().width>0 && !['none','\"\"'].includes(getComputedStyle(el,'::before').content);})()`);
     }
     const lenses = app.editor.provideCodeLenses(vscode.window.activeTextEditor!.document);
@@ -283,7 +297,8 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     await config.update('statusBarButtons', ['file', 'forward', 'chats', 'search', 'settings', 'refresh'], vscode.ConfigurationTarget.Global);
     await ui.waitFor(`${buttonVisible('file')} && ${buttonVisible('forward')} && !(${buttonVisible('emojis')}) && !(${buttonVisible('chats')}) && !(${buttonVisible('search')}) && !(${buttonVisible('settings')}) && !(${buttonVisible('refresh')})`);
     await config.update('statusBarButtons', [], vscode.ConfigurationTarget.Global);
-    await ui.waitFor(`!(${buttonVisible('settings')}) && !(${buttonVisible('chats')})`);
+    await ui.waitFor(`Array.from(document.querySelectorAll('.editor-group-container.active .codelens-decoration a')).filter(el=>el.getBoundingClientRect().width>0).map(el=>el.textContent.trim()).join('|') === '发送'`);
+    assert.deepEqual(app.editor.provideCodeLenses(vscode.window.activeTextEditor!.document).map(lens => lens.command!.command), ['qq.send'], '关闭可选功能入口后仍保留发送');
     await config.update('statusBarButtons', ['emojis'], vscode.ConfigurationTarget.Global);
     await app.openChat('group:20002');
     const previousDraft = store.draft('group:20002').text, sent = backend.sent.length;

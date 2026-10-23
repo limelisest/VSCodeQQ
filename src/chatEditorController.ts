@@ -148,6 +148,7 @@ export class ChatEditorController implements vscode.Disposable {
       title: `$(${entry.icon}) ${entry.label}`, tooltip: entry.label, command: entry.command,
       arguments: key === 'image' || key === 'file' ? [uri] : 'arguments' in entry ? [...entry.arguments] : []
     }));
+    lenses.push(new vscode.CodeLens(new vscode.Range(draftLine, 0, draftLine, 0), { title: '$(send) 发送', tooltip: '发送消息', command: 'qq.send', arguments: [uri] }));
     const target = this.host.store?.unseenAttention(key).at(-1);
     if (target) {
       const anchor = this.attentionAnchors.get(key), rendered = this.host.transcript?.rendered.get(key);

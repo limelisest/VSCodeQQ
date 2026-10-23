@@ -63,7 +63,7 @@ GitHub 仓库：[limelisest/VSCodeQQ](https://github.com/limelisest/VSCodeQQ)
 
 | 操作 | 快捷方式 / 操作方法 |
 | --- | --- |
-| **发送消息** | 在底部草稿区输入后按 `Enter` |
+| **发送消息** | 点击草稿上方的「发送」，或输入后按 `Enter` |
 | **换行** | `Shift+Enter` 或 `Ctrl+Enter`（macOS 为 `Cmd+Enter`） |
 | **回复消息** | 单击消息代码中的 `msg` 变量、右键菜单或 `Ctrl+Shift+R` |
 | **取消回复** | 删除草稿里的 `[回复:群名片]`，或输入 `/cancel_reply` |

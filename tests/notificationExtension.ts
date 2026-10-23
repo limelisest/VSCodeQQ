@@ -26,6 +26,7 @@ export async function testMessageNotifications(app: QQApp, backend: MockNapCat, 
       const style = getComputedStyle(message);
       return { text: item.textContent, messageText: message.textContent, linkText: message.querySelector('a')?.textContent, height: message.getBoundingClientRect().height, lineHeight: parseFloat(style.lineHeight), links: [...message.querySelectorAll('a')].map(link => link.getAttribute('href')) };
     })()`);
+    assert.ok(preview.messageText.startsWith('测试好友：' + probe), '通知以发送人的好友备注开头，仅保留发送人和正文');
     assert.ok(!preview.text.includes('hidden-full-message-tail'));
     assert.ok(preview.text.includes('…'));
     assert.ok(preview.height <= preview.lineHeight * 2, 'default notification preview stays compact');

@@ -19,8 +19,8 @@ function previewText(value: string, limit: number): string {
   }
   return parts.map(part => part.text).join('');
 }
-export function notificationPreview(chat: string, reason: string, body: string): string {
-  return previewText(`${previewText(chat, 20)} · ${reason}：${body}`, 72);
+export function notificationPreview(sender: string, body: string): string {
+  return previewText(`${previewText(sender, 20)}：${body}`, 72);
 }
 
 export function groupNotification(data: any): NonNullable<Chat['notification']> {
