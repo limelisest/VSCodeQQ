@@ -1,5 +1,7 @@
 # VSCode QQ · 原生代码风格 QQ 客户端
 
+GitHub 仓库：[limelisest/VSCodeQQ](https://github.com/limelisest/VSCodeQQ)
+
 在 VS Code 原生编辑器里畅聊 QQ。基于 **OneBot v11** 协议规范，推荐配合 **[SnowLuma](https://github.com/SnowLuma/SnowLuma)** 使用，同时广泛兼容 **NapCat**、**Lagrange**、**LLOneBot**、**OpenShamrock** 等各类主流 OneBot 服务端。
 
 聊天记录以 C / Python / TypeScript 等代码语法风格高亮呈现，底部直接编写发送草稿，完美融入开发者的工作流与代码编辑习惯。
