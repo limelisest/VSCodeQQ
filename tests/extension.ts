@@ -82,6 +82,10 @@ export async function run(): Promise<void> {
       await testPermissions(app, backend, ui, checks);
       console.log(`QQ permission integration: ${checks.length} checks passed`); return;
     }
+    if (process.env.QQ_TEST_DRAFT_RESTORE_ONLY === '1') {
+      await testDraftRestore(app, backend, checks);
+      console.log(`QQ draft restore integration: ${checks.length} checks passed`); return;
+    }
     if (process.env.QQ_TEST_PASTE_ONLY === '1') {
       ui = await TestUI.connect(); await ui.call('Page.bringToFront');
       await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
@@ -624,7 +628,7 @@ export async function run(): Promise<void> {
       await new Promise(r => setTimeout(r, 350));
       const gap = await ui.evaluate(`(() => {
         const root = document.querySelector('.editor-group-container.active .monaco-editor');
-        const row = [...root.querySelectorAll('.view-line')].find(e => e.textContent.includes('Enter') && e.textContent.includes('草稿'));
+        const row = [...root.querySelectorAll('.view-line')].find(e => e.textContent.includes('Enter') && e.textContent.includes('Shift/Ctrl+Enter'));
         return row ? root.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom : null;
       })()`);
       assert.ok(gap !== null && gap >= -2 && gap < 80, `空草稿挂机消息 ${i} 后发送栏底部空白 ${gap}px`);

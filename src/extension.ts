@@ -1,4 +1,4 @@
-import { languageLabels, statusBarButtons } from './settingsSchema';
+import { languageLabels } from './settingsSchema';
 import { AttachmentImporter, selectAttachmentFiles } from './attachmentImporter';
 import * as vscode from 'vscode';
 import * as path from 'node:path';
@@ -70,7 +70,7 @@ export class QQApp implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
   private output = vscode.window.createOutputChannel('QQ');
   private status = vscode.window.createStatusBarItem('qq.unread', vscode.StatusBarAlignment.Left, 10);
-  private statusButtons = new Map<string, vscode.StatusBarItem>();
+  private latestStatus = vscode.window.createStatusBarItem('qq.status.latest', vscode.StatusBarAlignment.Left, 9);
   private initializationRetry?: NodeJS.Timeout;
   private cacheTimer?: NodeJS.Timeout;
   private cleaningCache?: Promise<number>;
@@ -106,7 +106,7 @@ export class QQApp implements vscode.Disposable {
       if (e.affectsConfiguration('qq')) {
         this.settingsTree.refresh();
         if (e.affectsConfiguration('qq.notifications') && vscode.workspace.getConfiguration('qq').get('notifications') === 'off') this.messageNotifications.clear();
-        if (e.affectsConfiguration('qq.statusBarButtons')) this.refreshStatusButtons();
+        if (e.affectsConfiguration('qq.statusBarButtons')) this.editor.refreshAttention();
         if (Object.keys(reminderColors).some(key => e.affectsConfiguration('qq.' + key))) { this.editor.refreshHighlights(); void syncReminderColors().catch(error => this.log(error)); this.trees.forEach(tree => tree.refresh()); this.tabs.refresh(); }
         if (this.store) this.store.limit = this.config.messageLimit;
         for (const editor of vscode.window.visibleTextEditors) this.editor.decorate(editor);
@@ -118,12 +118,14 @@ export class QQApp implements vscode.Disposable {
     this.emojis = new EmojiPicker(context, this);
     this.emojiCompletion = new EmojiCompletion(this);
     this.status.name = 'QQ 未读消息数量';
-    this.refreshStatusButtons();
+    this.latestStatus.name = 'QQ 置底'; this.latestStatus.text = '$(arrow-down) 置底';
+    this.latestStatus.tooltip = '回到最新消息'; this.latestStatus.command = 'qq.latest';
+    this.refreshLatestStatus();
     this.disposables.push(this.tabChanges, vscode.window.registerFileDecorationProvider({
       onDidChangeFileDecorations: this.tabChanges.event,
       provideFileDecoration: uri => this.tabDecoration(uri)
     }));
-    this.disposables.push(this.output, this.status, this.messageNotifications);
+    this.disposables.push(this.output, this.status, this.latestStatus, this.messageNotifications);
     const selector = { scheme: 'qqchat', language: 'qq-chat' };
     this.disposables.push(vscode.languages.registerCompletionItemProvider(selector, this.emojiCompletion, '!', '！'));
     this.disposables.push(vscode.languages.registerCompletionItemProvider(selector, {
@@ -217,7 +219,7 @@ export class QQApp implements vscode.Disposable {
       }
     }));
     this.disposables.push(vscode.window.onDidChangeActiveTextEditor(editor => {
-      this.native.updateContext(); this.syncListSelection(); this.refreshStatusButtons();
+      this.native.updateContext(); this.syncListSelection(); this.refreshLatestStatus();
       const key = editor && this.transcript?.key(editor.document.uri);
       if (key) { this.target = key; this.emojis.update(); this.editor.decorate(editor!); this.checkRead(); void this.ensureChatLoaded(key, 0); }
     }), vscode.window.onDidChangeWindowState(() => this.checkRead()),
@@ -239,12 +241,12 @@ export class QQApp implements vscode.Disposable {
       if (event.kind === vscode.TextEditorSelectionChangeKind.Keyboard || event.kind === vscode.TextEditorSelectionChangeKind.Mouse) this.checkRead();
     }));
     this.disposables.push(vscode.window.tabGroups.onDidChangeTabs(event => {
-      this.tabs.refresh(); this.syncListSelection(); this.refreshStatusButtons();
+      this.tabs.refresh(); this.syncListSelection(); this.refreshLatestStatus();
       for (const tab of event.opened) if (tab.input instanceof vscode.TabInputText) {
         const key = this.transcript?.key(tab.input.uri); if (key) void this.ensureChatLoaded(key, tab.isActive ? 0 : 1);
       }
     }));
-    this.disposables.push(vscode.window.tabGroups.onDidChangeTabGroups(() => { this.syncListSelection(); this.refreshStatusButtons(); }));
+    this.disposables.push(vscode.window.tabGroups.onDidChangeTabGroups(() => { this.syncListSelection(); this.refreshLatestStatus(); }));
     this.client.on('connected', () => {
       const epoch = this.session.advance();
       this.historyQueue.clear(); this.historyLoaded.clear();
@@ -515,9 +517,10 @@ export class QQApp implements vscode.Disposable {
     const reason = message.mentioned ? '有人 @你' : replyToSelf ? '有人回复你' : '新消息';
     this.messageNotifications.show(store.selfId, key, notificationPreview(chat.name, reason, messageText(message)));
   }
-  async openChat(input: string | Chat): Promise<void> {
+  async openChat(input: string | Chat | { account: string; key: string }): Promise<void> {
     const key = typeof input === 'string' ? input : input.key;
     const store = this.store, transcript = this.transcript;
+    if (typeof input !== 'string' && 'account' in input && input.account !== store?.selfId) throw new Error('这条通知属于其他 QQ 账号，请查看当前账号的新消息通知');
     const chat = store?.chats.get(key);
     if (!chat || !store || !transcript) throw new Error('当前账号没有这个会话');
     const version = ++this.openVersion;
@@ -733,10 +736,7 @@ export class QQApp implements vscode.Disposable {
     });
     register('qq.importConfig', async () => { if (await this.config.import()) await this.connect(); }, () => 'config');
     register('qq.refresh', () => this.ready ? this.refresh() : this.connect(), () => 'lists');
-    register('qq.openChat', (item: string | Chat) => this.openChat(item));
-    register('qq.openNotification', (account: string, key: string) => {
-      if (this.store?.selfId === account && this.store.chats.has(key)) return this.openChat(key);
-    });
+    register('qq.openChat', (item: string | Chat | { account: string; key: string }) => this.openChat(item));
     register('qq.toggleCollapsed', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleCollapsed(key); });
     register('qq.toggleFavorite', (item?: Chat | string) => { const key = currentKey(item); if (key) this.store?.toggleFavorite(key); });
     register('qq.markRead', async (item?: Chat | string) => {
@@ -1071,7 +1071,7 @@ export class QQApp implements vscode.Disposable {
     this.refreshUnreadStatus(); this.emojis.update();
   }
   refreshUnreadStatus(): void {
-    this.refreshStatusButtons();
+    this.refreshLatestStatus();
     if (!this.store) { this.status.hide(); return; }
     const count = [...this.store.chats.values()].reduce((sum, chat) => sum + countedUnread(chat), 0);
     this.status.text = `$(mail) ${count}`;
@@ -1080,36 +1080,16 @@ export class QQApp implements vscode.Disposable {
     this.status.command = 'qq.openUnread';
     this.status.show();
   }
-  private refreshStatusButtons(): void {
-    const selected = vscode.workspace.getConfiguration('qq').get<string[]>('statusBarButtons', ['emojis', 'image', 'file', 'forward']);
-    for (const [key, item] of this.statusButtons) if (!selected.includes(key)) { item.dispose(); this.statusButtons.delete(key); }
-    Object.entries(statusBarButtons).forEach(([key, entry], index) => {
-      if (!selected.includes(key) || this.statusButtons.has(key)) return;
-      const item = vscode.window.createStatusBarItem(`qq.status.${key}`, vscode.StatusBarAlignment.Left, 9 - index / 10);
-      item.name = `QQ ${entry.label}`; item.text = `$(${entry.icon})`;
-      item.tooltip = entry.label;
-      item.accessibilityInformation = { label: `QQ ${entry.label}` };
-      item.command = { title: entry.label, command: entry.command, arguments: 'arguments' in entry ? [...entry.arguments] : [] };
-      this.statusButtons.set(key, item);
-    });
+  private refreshLatestStatus(): void {
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    const show = input instanceof vscode.TabInputText && !!this.transcript?.key(input.uri);
-    for (const [key, item] of this.statusButtons) {
-      if (show && (key === 'image' || key === 'file')) {
-        const uri = input.uri.toString();
-        if (typeof item.command !== 'object' || item.command.arguments?.[0] !== uri) {
-          item.command = { title: item.name!, command: statusBarButtons[key].command, arguments: [uri] };
-        }
-      }
-      if (show) item.show(); else item.hide();
-    }
+    if (input instanceof vscode.TabInputText && this.transcript?.key(input.uri)) this.latestStatus.show();
+    else this.latestStatus.hide();
   }
   private log(error: unknown): void { this.output.appendLine(`[${new Date().toISOString()}] ${error instanceof Error ? error.message : String(error)}`); }
   async shutdown(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true; clearTimeout(this.historyClickTimer); this.session.advance(); clearTimeout(this.initializationRetry); clearInterval(this.cacheTimer); clearInterval(this.notificationTimer); this.notifications?.dispose(); this.historyQueue.clear();
     this.client.dispose(); await this.store?.dispose(); this.transcript?.dispose();
-    for (const item of this.statusButtons.values()) item.dispose();
     this.disposables.forEach(d => d.dispose());
   }
   dispose(): void { void this.shutdown(); }

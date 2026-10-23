@@ -8,10 +8,10 @@ export class MessageNotifications implements vscode.Disposable {
   constructor(private log: (error: unknown) => void) {}
   show(account: string, key: string, preview: string): void {
     if (this.stopped) return;
-    const args = encodeURIComponent(JSON.stringify([account, key]));
+    const args = encodeURIComponent(JSON.stringify([{ account, key }]));
     void vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: `[查看](command:qq.openNotification?${args}) ${preview}`,
+      title: `[查看](command:qq.openChat?${args}) ${preview}`,
       cancellable: false
     }, progress => new Promise<void>(resolve => {
       // A zero-width determinate bar keeps the preview still while it is visible.

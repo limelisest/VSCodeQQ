@@ -1,4 +1,4 @@
-import { chatSettings, ChatSetting, statusBarButtons } from './settingsSchema';
+import { chatSettings, ChatSetting, draftActions } from './settingsSchema';
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import { CodeLanguage, isCodeLanguage } from './codeStyle';
@@ -35,7 +35,7 @@ export class Configuration {
     const settings = vscode.workspace.getConfiguration('qq');
     const options = Object.fromEntries(Object.entries(chatSettings).map(([key, definition]) => [key, settings.get(key, definition.default)])) as Record<ChatSetting, unknown>;
     const buttons = options.statusBarButtons;
-    options.statusBarButtons = Array.isArray(buttons) ? buttons.filter(key => typeof key === 'string' && Object.hasOwn(statusBarButtons, key)) : chatSettings.statusBarButtons.default;
+    options.statusBarButtons = Array.isArray(buttons) ? buttons.filter(key => typeof key === 'string' && Object.hasOwn(draftActions, key)) : chatSettings.statusBarButtons.default;
     return options;
   }
   async token(): Promise<string> { return await this.context.secrets.get('qq.wsToken') ?? ''; }

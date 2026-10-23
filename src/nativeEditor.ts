@@ -13,7 +13,11 @@ import { mentionPattern } from './mentions';
 import { historyEdits } from './historyEdits';
 
 const LEGACY_DRAFT_DIVIDER = '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───';
-export const DRAFT_DIVIDER = LEGACY_DRAFT_DIVIDER + ' [发送]';
+export const DRAFT_DIVIDER = '// ─── Enter 发送 · Shift/Ctrl+Enter 换行 ───';
+const DRAFT_DIVIDERS = [DRAFT_DIVIDER, LEGACY_DRAFT_DIVIDER + ' [发送]', LEGACY_DRAFT_DIVIDER];
+function draftDivider(text: string): string | undefined {
+  return DRAFT_DIVIDERS.map(marker => `\n${marker}\n`).find(divider => text.includes(divider));
+}
 interface Host {
   store?: ChatStore; transcript?: Transcript; attachments?: AttachmentFiles;
   beforeHistoryChange(uri: vscode.Uri): void;
@@ -64,7 +68,7 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     const text = doc.getText();
     const prefix = this.prefixes.get(doc.uri.toString());
     if (prefix && text.startsWith(prefix)) return { boundary: prefix.lastIndexOf('\n', prefix.length - 2), start: prefix.length, text: text.slice(prefix.length) };
-    const divider = text.includes(`\n${DRAFT_DIVIDER}\n`) ? `\n${DRAFT_DIVIDER}\n` : `\n${LEGACY_DRAFT_DIVIDER}\n`;
+    const divider = draftDivider(text); if (!divider) return;
     const boundary = text.indexOf(divider);
     if (boundary < 0 || text.indexOf(divider, boundary + divider.length) >= 0) return;
     const start = boundary + divider.length;
@@ -92,16 +96,16 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
     // differ from the expected snapshot while its new history is already valid.
     if (expected && text.startsWith(expected.prefix)) expected.publish();
     if (internal) this.expectedEdits.delete(uri);
-    const replacesPage = !internal && !!this.region(doc) && changes.some(change => change.rangeOffset === 0 && [DRAFT_DIVIDER, LEGACY_DRAFT_DIVIDER].some(marker => change.text.includes(`\n${marker}\n`)));
+    const replacesPage = !internal && !!this.region(doc) && changes.some(change => change.rangeOffset === 0 && DRAFT_DIVIDERS.some(marker => change.text.includes(`\n${marker}\n`)));
     if (!internal && changes.length && (!this.historyMatches(doc) || replacesPage)) {
       const old = Buffer.from(this.buffers.get(uri) ?? []).toString('utf8');
-      const divider = old.includes(`\n${DRAFT_DIVIDER}\n`) ? `\n${DRAFT_DIVIDER}\n` : `\n${LEGACY_DRAFT_DIVIDER}\n`, boundary = old.indexOf(divider);
-      const start = boundary < 0 ? -1 : boundary + divider.length;
+      const divider = draftDivider(old), boundary = divider ? old.indexOf(divider) : -1;
+      const start = divider === undefined || boundary < 0 ? -1 : boundary + divider.length;
       // VS Code may reapply an older complete page from its hot-exit backup.
       // That page is a projection, not a draft edit: folding its replacement
       // text across the divider would copy history (including failed sends)
       // into the current draft. Persisted draft state owns page restoration.
-      const pageSnapshot = replacesPage || !!this.region(doc) && changes.some(change => change.rangeOffset < start && change.text.includes(divider));
+      const pageSnapshot = replacesPage || !!this.region(doc) && changes.some(change => change.rangeOffset < start && !!divider && change.text.includes(divider));
       let draft = pageSnapshot ? store.draft(key).text : start >= 0 ? old.slice(start) : store.draft(key).text;
       if (!pageSnapshot && start >= 0) for (const change of [...changes].sort((a, b) => b.rangeOffset - a.rangeOffset)) {
         const end = change.rangeOffset + change.rangeLength;
@@ -277,12 +281,6 @@ export class NativeEditor implements vscode.FileSystemProvider, vscode.Disposabl
   links(doc: vscode.TextDocument): vscode.DocumentLink[] {
     const region = this.region(doc); if (!region) return [];
     const result: vscode.DocumentLink[] = [];
-    const dividerLine = doc.positionAt(region.start).line - 1;
-    const send = doc.lineAt(dividerLine).text.lastIndexOf('[发送]');
-    if (send >= 0) {
-      const link = new vscode.DocumentLink(new vscode.Range(dividerLine, send, dividerLine, send + 4), vscode.Uri.parse(`command:qq.send?${encodeURIComponent(JSON.stringify([doc.uri.toString()]))}`));
-      link.tooltip = '发送'; result.push(link);
-    }
     const key = this.host.transcript?.key(doc.uri), draft = key ? this.host.store?.draft(key) : undefined;
     if (draft?.replyPlaceholder && draft.replyId) {
       const index = region.text.indexOf(draft.replyPlaceholder);

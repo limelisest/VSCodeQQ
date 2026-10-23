@@ -2,7 +2,7 @@
   "name": "limelisest-napcat-qq",
   "displayName": "OneBot QQ · Native Chat",
   "description": "在 VS Code 原生编辑器中畅聊 QQ，推荐搭配 SnowLuma 使用，亦全面兼容 NapCat、Lagrange、LLOneBot 等任意 OneBot v11 服务。",
-  "version": "0.2.23-dev2",
+  "version": "0.2.23-dev3",
   "publisher": "LimeLisest",
   "author": "LimeLisest",
   "icon": "media/icon.png",
@@ -165,7 +165,7 @@
       },
       {
         "command": "qq.latest",
-        "title": "QQ: 跳到最新消息",
+        "title": "QQ: 置底",
         "icon": "$(arrow-down)"
       },
       {
@@ -328,33 +328,28 @@
       "editor/title": [
         {
           "command": "qq.focusInput",
-          "when": "resourceScheme == qqchat",
-          "group": "navigation@1"
+          "when": "resourceScheme == qqchat"
         },
         {
           "command": "qq.latest",
           "when": "resourceScheme == qqchat",
-          "group": "navigation@2"
+          "group": "navigation@1"
         },
         {
           "command": "qq.loadHistory",
-          "when": "resourceScheme == qqchat",
-          "group": "navigation@3"
+          "when": "resourceScheme == qqchat"
         },
         {
           "command": "qq.insertImage",
-          "when": "resourceScheme == qqchat",
-          "group": "navigation@4"
+          "when": "resourceScheme == qqchat"
         },
         {
           "command": "qq.emojis",
-          "when": "resourceScheme == qqchat",
-          "group": "navigation@5"
+          "when": "resourceScheme == qqchat"
         },
         {
           "command": "qq.send",
-          "when": "resourceScheme == qqchat",
-          "group": "navigation@6"
+          "when": "resourceScheme == qqchat"
         },
         {
           "command": "qq.restoreTranscript",
@@ -366,8 +361,7 @@
         },
         {
           "command": "qq.mentionMember",
-          "when": "resourceScheme == qqchat && resourcePath =~ /^\\/group\\//",
-          "group": "navigation@8"
+          "when": "resourceScheme == qqchat && resourcePath =~ /^\\/group\\//"
         }
       ],
       "editor/context": [
@@ -652,7 +646,7 @@
           "uniqueItems": true,
           "default": ["emojis", "image", "file", "forward"],
           "scope": "application",
-          "description": "会话底栏入口。"
+          "description": "草稿上方的常用功能入口。"
         },
         "qq.emojiOrder": {
           "type": "string",

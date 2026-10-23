@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import type { QQApp } from '../src/extension';
 import { ChatStore } from '../src/store';
+import { DRAFT_DIVIDER } from '../src/nativeEditor';
 import { newChat, parseMessage } from '../src/model';
 import { MockNapCat, until } from './fixture';
 
@@ -35,6 +36,11 @@ export async function testDraftRestore(app: QQApp, backend: MockNapCat, checks: 
       assert.equal(await editor.edit(edit => edit.replace(new vscode.Range(0, 0, editor.document.lineCount, 0), snapshot)), true);
       await until(() => !app.native.isUpdating(editor.document));
     };
+    for (const suffix of [' [发送]', '']) {
+      await restorePage(failedSnapshot.replace(DRAFT_DIVIDER, '// ─── 草稿 · Enter 发送 · Shift/Ctrl+Enter 换行 ───' + suffix));
+      assert.equal(store.draft(key).text, '', '旧分割线恢复时不能把历史并入草稿');
+      assert.ok(app.native.historyMatches(editor.document));
+    }
     await restorePage(failedSnapshot);
     assert.equal(store.draft(key).text, '', '旧页面中的失败记录不能被并入第二天草稿');
     assert.equal(app.native.draft(editor.document), '');

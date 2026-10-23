@@ -1,10 +1,10 @@
 import { codeLanguages } from './codeStyle';
 export const languageLabels = { c: 'C', python: 'Python', javascript: 'JavaScript', typescript: 'TypeScript', dart: 'Dart', kotlin: 'Kotlin', java: 'Java', swift: 'Swift' } as const;
-export const statusBarButtons = {
-  emojis: { label: '表情', icon: 'smiley', command: 'qq.emojis', arguments: [{ autoClose: true }] },
-  image: { label: '图片', icon: 'qq-picture', command: 'qq.insertImage' },
-  file: { label: '文件', icon: 'file-add', command: 'qq.insertFile' },
-  forward: { label: '转发', icon: 'share', command: 'qq.forwardMessage' }
+export const draftActions = {
+  emojis: { label: '表情', command: 'qq.emojis', arguments: [{ autoClose: true }] },
+  image: { label: '图片', command: 'qq.insertImage' },
+  file: { label: '文件', command: 'qq.insertFile' },
+  forward: { label: '转发', command: 'qq.forwardMessage' }
 } as const;
 export const reminderColors = {
   mentionColor: { label: '@我', default: '#E5A030' }, replyColor: { label: '回复我', default: '#409CFF' },
@@ -20,7 +20,7 @@ export const chatSettings = {
   messageLimit: { type: 'number', default: 500, minimum: 50, maximum: 2000 },
   notifications: { type: 'string', default: 'all', enum: ['all', 'mentions', 'off'] },
   emojiOrder: { type: 'string', default: 'original', enum: ['original', 'reverse'] },
-  statusBarButtons: { type: 'array', default: ['emojis', 'image', 'file', 'forward'], items: { type: 'string', enum: Object.keys(statusBarButtons) }, uniqueItems: true },
+  statusBarButtons: { type: 'array', default: ['emojis', 'image', 'file', 'forward'], items: { type: 'string', enum: Object.keys(draftActions) }, uniqueItems: true },
   cacheRetentionDays: { type: 'number', default: 7, minimum: 1, maximum: 90 },
   mentionColor: { type: 'string', default: '#E5A030', pattern: '^#[0-9a-fA-F]{6}$' },
   replyColor: { type: 'string', default: '#409CFF', pattern: '^#[0-9a-fA-F]{6}$' },
@@ -43,7 +43,7 @@ export function validateChatSettings(input: Record<string, unknown>): [ChatSetti
     const value = input[key], definition = chatSettings[key];
     if (value === undefined) continue;
     if ('items' in definition) {
-      if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || !definition.items.enum.includes(item)) || new Set(value).size !== value.length) throw new Error('底栏入口选项无效');
+      if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || !definition.items.enum.includes(item)) || new Set(value).size !== value.length) throw new Error('草稿入口选项无效');
     } else if ('minimum' in definition) {
       if (typeof value !== 'number' || !Number.isInteger(value) || value < definition.minimum || value > definition.maximum) throw new Error(`${key} 必须为 ${definition.minimum}～${definition.maximum} 的整数`);
     } else if ('enum' in definition) {

@@ -3,7 +3,7 @@ import { ChatStore } from './store';
 import { Transcript } from './transcript';
 import { AttachmentFiles } from './attachments';
 import { NativeEditor } from './nativeEditor';
-import { reminderColors } from './settingsSchema';
+import { reminderColors, draftActions } from './settingsSchema';
 interface EditorHost {
   store?: ChatStore; transcript?: Transcript; attachments?: AttachmentFiles;
   checkRead(): void;
@@ -13,7 +13,6 @@ type Anchor = { messageId?: string; offset: number; character: number; draftOffs
 type ViewSnapshot = { editor: vscode.TextEditor; follow: boolean; top: Anchor; selections: { anchor: Anchor; active: Anchor }[] };
 export class ChatEditorController implements vscode.Disposable {
   private imageDecoration = vscode.window.createTextEditorDecorationType({ color: new vscode.ThemeColor('textLink.foreground'), textDecoration: 'underline' });
-  private sendDecoration = vscode.window.createTextEditorDecorationType({ color: new vscode.ThemeColor('textLink.foreground'), textDecoration: 'underline' });
   private fieldDecoration = vscode.window.createTextEditorDecorationType({ textDecoration: 'underline', rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed });
   private ownDecoration = vscode.window.createTextEditorDecorationType({ isWholeLine: true, backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'), borderWidth: '0 0 0 2px', borderStyle: 'solid', borderColor: new vscode.ThemeColor('editorGutter.addedBackground') });
   private recalledDecoration = vscode.window.createTextEditorDecorationType({
@@ -43,8 +42,8 @@ export class ChatEditorController implements vscode.Disposable {
       afterHistoryChange: (doc, applied) => this.afterHistoryChange(doc, applied)
     });
     this.refreshHighlights();
-    this.disposables.push(this.native, this.imageDecoration, this.sendDecoration, this.fieldDecoration, this.ownDecoration, this.recalledDecoration, this.attentionLenses,
-      vscode.languages.registerCodeLensProvider({ scheme: 'qqchat' }, { onDidChangeCodeLenses: this.attentionLenses.event, provideCodeLenses: doc => this.provideAttentionLinks(doc) }),
+    this.disposables.push(this.native, this.imageDecoration, this.fieldDecoration, this.ownDecoration, this.recalledDecoration, this.attentionLenses,
+      vscode.languages.registerCodeLensProvider({ scheme: 'qqchat' }, { onDidChangeCodeLenses: this.attentionLenses.event, provideCodeLenses: doc => this.provideCodeLenses(doc) }),
       vscode.workspace.registerFileSystemProvider('qqchat', this.native, { isCaseSensitive: true }),
       vscode.workspace.onDidCloseTextDocument(doc => this.native.release(doc)),
       vscode.window.onDidChangeTextEditorVisibleRanges(({ textEditor: editor }) => {
@@ -84,6 +83,15 @@ export class ChatEditorController implements vscode.Disposable {
   private atBottom(editor: vscode.TextEditor): boolean {
     return editor.visibleRanges.some(range => range.end.line >= editor.document.lineCount - 3);
   }
+  private visibleTop(editor: vscode.TextEditor): vscode.Position {
+    const range = editor.visibleRanges[0];
+    if (!range) return new vscode.Position(0, 0);
+    // A partly visible wrapped line can become the next line after a layout
+    // update. Anchor the first complete line instead of revealing that fragment
+    // again, which adds VS Code's surrounding/sticky lines to the scroll.
+    return range.start.character > 0 && range.start.line < range.end.line
+      ? new vscode.Position(range.start.line + 1, 0) : range.start;
+  }
   latest(editor = vscode.window.activeTextEditor, markRead = true): void {
     const key = editor && this.host.transcript?.key(editor.document.uri);
     if (!editor || !key) return;
@@ -113,7 +121,7 @@ export class ChatEditorController implements vscode.Disposable {
     const editor = vscode.window.activeTextEditor, store = this.host.store;
     const key = editor && this.host.transcript?.key(editor.document.uri);
     const target = key && store?.unseenAttention(key).at(-1);
-    const state = JSON.stringify([editor?.document.uri.toString(), target && target.id, key && this.attentionAnchors.get(key)]);
+    const state = JSON.stringify([editor?.document.uri.toString(), target && target.id, key && this.attentionAnchors.get(key), vscode.workspace.getConfiguration('qq').get('statusBarButtons')]);
     if (state !== this.attentionLensState) { this.attentionLensState = state; this.attentionLenses.fire(); }
     this.updateUnreadStatus();
     if (!editor || !key || !store || !vscode.window.state.focused) return;
@@ -131,13 +139,22 @@ export class ChatEditorController implements vscode.Disposable {
       store.markViewed(key, seen);
     }, 180);
   }
-  provideAttentionLinks(doc: vscode.TextDocument): vscode.CodeLens[] {
+  provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
     const key = this.host.transcript?.key(doc.uri), region = this.native.region(doc);
     if (!key || !region || vscode.window.activeTextEditor?.document !== doc || !this.native.historyMatches(doc)) return [];
-    const target = this.host.store?.unseenAttention(key).at(-1); if (!target) return [];
-    const anchor = this.attentionAnchors.get(key), rendered = this.host.transcript?.rendered.get(key);
-    const line = (anchor ? rendered?.starts.get(anchor) : undefined) ?? doc.positionAt(region.start).line - 1;
-    return [new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: '↑ 上一个 @ 或回复', command: 'qq.previousAttention', arguments: [doc.uri.toString(), target.id], tooltip: '上一个 @ 或回复' })];
+    const draftLine = doc.positionAt(region.start).line - 1, uri = doc.uri.toString();
+    const selected = vscode.workspace.getConfiguration('qq').get<string[]>('statusBarButtons', ['emojis', 'image', 'file', 'forward']);
+    const lenses = Object.entries(draftActions).filter(([key]) => selected.includes(key)).map(([key, entry]) => new vscode.CodeLens(new vscode.Range(draftLine, 0, draftLine, 0), {
+      title: entry.label, command: entry.command,
+      arguments: key === 'image' || key === 'file' ? [uri] : 'arguments' in entry ? [...entry.arguments] : []
+    }));
+    const target = this.host.store?.unseenAttention(key).at(-1);
+    if (target) {
+      const anchor = this.attentionAnchors.get(key), rendered = this.host.transcript?.rendered.get(key);
+      const line = (anchor ? rendered?.starts.get(anchor) : undefined) ?? draftLine;
+      lenses.push(new vscode.CodeLens(new vscode.Range(line, 0, line, 0), { title: '↑ 上一个 @ 或回复', command: 'qq.previousAttention', arguments: [uri, target.id], tooltip: '上一个 @ 或回复' }));
+    }
+    return lenses;
   }
   async previousAttention(uri?: string, messageId?: string): Promise<void> {
     const editor = vscode.window.activeTextEditor, store = this.host.store, transcript = this.host.transcript;
@@ -219,10 +236,9 @@ export class ChatEditorController implements vscode.Disposable {
       ...content?.actions.filter(span => span.kind === 'reply') ?? []
     ].filter(span => !recalled.has(span.line)).map(span => new vscode.Range(span.line, span.start, span.line, span.end)));
     const draftLinks = this.native.links(editor.document);
-    this.setDecorations(editor, this.sendDecoration, draftLinks.filter(link => link.target?.path === 'qq.send').map(link => link.range));
     this.setDecorations(editor, this.imageDecoration, [
       ...(reliable ? this.host.transcript.provideDocumentLinks(editor.document).map(link => link.range) : []),
-      ...draftLinks.filter(link => link.target?.path !== 'qq.send').map(link => link.range)
+      ...draftLinks.map(link => link.range)
     ].filter(range => !recalled.has(range.start.line)));
   }
   beforeHistoryChange(uri: vscode.Uri): void {
@@ -236,7 +252,7 @@ export class ChatEditorController implements vscode.Disposable {
     };
     this.snapshots.set(uri.toString(), vscode.window.visibleTextEditors.filter(editor => editor.document.uri.toString() === uri.toString()).map(editor => ({
       editor, follow: this.following.get(editor) ?? this.atBottom(editor),
-      top: anchor(editor.document, editor.visibleRanges[0]?.start ?? new vscode.Position(0, 0)),
+      top: anchor(editor.document, this.visibleTop(editor)),
       selections: editor.selections.map(s => ({ anchor: anchor(editor.document, s.anchor), active: anchor(editor.document, s.active) }))
     })));
   }
@@ -258,7 +274,7 @@ export class ChatEditorController implements vscode.Disposable {
       if (snapshot.follow) this.latest(editor, false);
       else {
         const top = position(snapshot.top);
-        if (editor.visibleRanges[0]?.start.line !== top.line) editor.revealRange(new vscode.Range(top, top), vscode.TextEditorRevealType.AtTop);
+        if (this.visibleTop(editor).line !== top.line) editor.revealRange(new vscode.Range(top, top), vscode.TextEditorRevealType.AtTop);
       }
       this.following.set(editor, snapshot.follow);
     }

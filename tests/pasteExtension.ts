@@ -179,6 +179,9 @@ export async function testPaste(app: QQApp, backend: MockNapCat, ui: TestUI, che
     await vscode.env.clipboard.writeText(missing);
     await vscode.commands.executeCommand('editor.action.clipboardPasteAction');
     await ui.waitFor(`document.body.textContent.includes('粘贴失败')`);
+    // The error notification can render before VS Code applies the provider's
+    // replacement edit; wait for that edit before inspecting the draft.
+    await until(() => app.native.draft(editor.document) === '保留草稿');
     assert.equal(app.native.draft(editor.document), '保留草稿', '失败不能以路径替换选中的草稿');
     assert.equal(app.store!.draft(key).attachments.length, 0);
     assert.deepEqual(new Set(await fs.readdir(app.attachments!.folder)), cacheBefore);

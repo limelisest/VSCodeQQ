@@ -6,6 +6,14 @@ import { QQApp } from '../src/extension';
 import { newChat, parseMessage } from '../src/model';
 import { MockNapCat, png, until } from './fixture';
 import { TestUI } from './ui';
+import { DRAFT_DIVIDER } from '../src/nativeEditor';
+
+async function clickDraftAction(ui: TestUI, label: string): Promise<void> {
+  const point = await ui.waitFor(`(() => {const el=[...document.querySelectorAll('.editor-group-container.active .codelens-decoration a')].find(el=>el.textContent.trim()===${JSON.stringify(label)} && el.getBoundingClientRect().width>0);if(!el)return null;const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  await ui.call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...point });
+  await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
+  await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+}
 
 export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
   const store = app.store!, key = 'group:20002', sent = backend.sent.length;
@@ -27,7 +35,9 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
   };
   const aboveMessage = async (editor: vscode.TextEditor, id: string) => {
     const start = app.transcript!.rendered.get(key)!.starts.get(id)!;
-    assert.equal(app.editor.provideAttentionLinks(editor.document)[0].range.start.line, start);
+    const lenses = app.editor.provideCodeLenses(editor.document);
+    assert.deepEqual(lenses.filter(lens => lens.range.start.line === start).map(lens => lens.command?.command), ['qq.previousAttention']);
+    assert.ok(lenses.filter(lens => lens.command?.command !== 'qq.previousAttention').every(lens => lens.range.start.line === editor.document.positionAt(app.native.region(editor.document)!.start).line - 1));
     const stamp = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/.exec(editor.document.lineAt(start).text)![0];
     await ui.waitFor(`(() => {
       const link = (${buttons})[0];
@@ -52,7 +62,9 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     await app.openChat(key);
     const editor = vscode.window.activeTextEditor!;
     await ui.waitFor(`(${buttons}).length === 1`);
-    assert.equal(app.editor.provideAttentionLinks(editor.document)[0].range.start.line, editor.document.positionAt(app.native.region(editor.document)!.start).line - 1);
+    assert.equal(app.editor.provideCodeLenses(editor.document).find(lens => lens.command?.command === 'qq.previousAttention')!.range.start.line, editor.document.positionAt(app.native.region(editor.document)!.start).line - 1);
+    assert.deepEqual(app.editor.provideCodeLenses(editor.document).map(lens => lens.command!.title), ['表情', '图片', '文件', '转发', '↑ 上一个 @ 或回复']);
+    await ui.waitFor(`(() => { const jump=(${buttons})[0], links=[...jump.parentElement.querySelectorAll('a')]; return links.map(el=>el.textContent.trim()).join('|')==='表情|图片|文件|转发|↑ 上一个 @ 或回复'; })()`);
     assert.ok(!editor.document.getText().includes(label), '提示不写入聊天文本或草稿');
     assert.equal(await ui.evaluate(`(${buttons})[0].textContent.trim().endsWith(${JSON.stringify(label)})`), true);
     await click();
@@ -61,9 +73,9 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     assert.equal(store.draft(key).text, '定位后保留的草稿');
     assert.equal(app.editor.isFollowing(editor), false);
     await aboveMessage(editor, '880040');
-    assert.equal(app.editor.provideAttentionLinks(editor.document)[0].command!.arguments![1], '880008');
+    assert.equal(app.editor.provideCodeLenses(editor.document).find(lens => lens.command?.command === 'qq.previousAttention')!.command!.arguments![1], '880008');
     assert.equal(await ui.evaluate(`Array.from(document.querySelectorAll('.statusbar-item')).some(el=>el.textContent.includes(${JSON.stringify(label)}))`), false);
-    checks.push('分界线上方只有一个链接，点击后下一条链接显示在目标消息 DATE 上方，真实界面验证位置，不写入草稿');
+    checks.push('草稿功能入口后面按需显示跳转；点击后历史消息 DATE 上方仅显示跳转，功能入口仍固定在草稿处且不写入正文');
     await config.update('codeLanguage', 'python', vscode.ConfigurationTarget.Global);
     await app.native.sync(editor, true);
     await until(() => app.native.historyMatches(editor.document) && editor.document.getText().includes('def '));
@@ -76,12 +88,12 @@ export async function testAttention(app: QQApp, backend: MockNapCat, ui: TestUI,
     await click();
     try { await until(() => app.transcript!.rendered.get(key)!.messages.get(editor.selection.active.line) === '880008'); }
     catch (error) {
-      console.log('文内定位失败', JSON.stringify({ selected: app.transcript!.rendered.get(key)!.messages.get(editor.selection.active.line), unseen: store.unseenAttention(key).map(m=>m.id), links: app.editor.provideAttentionLinks(editor.document), draft: store.draft(key).text }));
+      console.log('文内定位失败', JSON.stringify({ selected: app.transcript!.rendered.get(key)!.messages.get(editor.selection.active.line), unseen: store.unseenAttention(key).map(m=>m.id), links: app.editor.provideCodeLenses(editor.document), draft: store.draft(key).text }));
       throw error;
     }
     await ui.waitFor(`(${buttons}).length === 0`);
     assert.equal(store.draft(key).text, '定位后保留的草稿');
-    checks.push('沿消息上的链接继续向前查看，切换代码风格仍定位正确，看完后链接消失');
+    checks.push('沿消息上的链接继续向前查看，切换代码风格仍定位正确，看完后仅跳转链接消失');
     const reference = app.transcript!.provideDocumentLinks(editor.document).find(l => l.target?.path === 'qq.openReplyOriginal' && l.range.start.line > app.transcript!.rendered.get(key)!.starts.get('880008')!)!;
     assert.equal(editor.document.getText(reference.range), 'replay');
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -134,26 +146,21 @@ async function testDraftSend(app: QQApp, backend: MockNapCat, ui: TestUI, checks
   const store = app.store!, key = 'group:20002'; await app.openChat(key);
   const editor = vscode.window.activeTextEditor!;
   store.setDraft(key, '分界线发送验收', undefined, []); await app.native.sync(editor);
-  const send = app.native.links(editor.document).find(link => link.target?.path === 'qq.send')!;
-  assert.equal(editor.document.getText(send.range), '[发送]');
-  assert.equal(send.range.start.line, editor.document.positionAt(app.native.region(editor.document)!.start).line - 1);
-  const args = JSON.parse(decodeURIComponent(send.target!.query));
-  const sent = backend.sent.length;
-  await vscode.window.showTextDocument(code); await vscode.commands.executeCommand('qq.send', ...args);
+  const dividerLine = editor.document.positionAt(app.native.region(editor.document)!.start).line - 1;
+  assert.equal(editor.document.lineAt(dividerLine).text, DRAFT_DIVIDER);
+  assert.ok(!DRAFT_DIVIDER.includes('草稿') && !DRAFT_DIVIDER.includes('[发送]'));
+  const uri = editor.document.uri.toString(), sent = backend.sent.length;
+  await vscode.window.showTextDocument(code); await vscode.commands.executeCommand('qq.send', uri);
   assert.equal(backend.sent.length, sent); assert.equal(store.draft(key).text, '分界线发送验收');
   await app.focusInput();
   await until(() => !app.native.isUpdating(editor.document) && app.native.historyMatches(editor.document));
   await ui.waitFor(`document.querySelector('.editor-group-container.active .view-lines')?.textContent.includes('分界线发送验收')`);
-  await ui.clickText('[发送]');
-  try { await until(() => backend.sent.length === sent + 1 && store.draft(key).text === '' && !app.native.isUpdating(editor.document)); }
-  catch (error) {
-    console.log('发送链接失败', JSON.stringify({ target: app.target, active: vscode.window.activeTextEditor?.document.uri.toString(), selection: editor.selection, sent: backend.sent.length - sent, draft: store.draft(key).text, history: app.native.historyMatches(editor.document), updating: app.native.isUpdating(editor.document) }));
-    throw error;
-  }
+  await ui.enter();
+  await until(() => backend.sent.length === sent + 1 && store.draft(key).text === '' && !app.native.isUpdating(editor.document));
   assert.equal(backend.sent.at(-1).message[0].data.text, '分界线发送验收');
-  await ui.clickText('[发送]'); await new Promise(resolve => setTimeout(resolve, 400));
+  await ui.enter(); await new Promise(resolve => setTimeout(resolve, 400));
   assert.equal(backend.sent.length, sent + 1);
-  checks.push('分界线 [发送] 真实单击只发送草稿，空草稿不重复提交，切到普通代码后旧链接不能发送其他会话');
+  checks.push('分界线仅显示发送换行提示，Enter 实际发送草稿，空草稿不重复提交，旧会话参数不能跨文档发送');
 }
 
 async function testFileSelection(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
@@ -171,9 +178,7 @@ async function testFileSelection(app: QQApp, backend: MockNapCat, ui: TestUI, ch
     for (const [button, source, title] of [['image', image, '选择要发送的图片'], ['file', file, '选择要发送的文件']]) {
       // Restored qqchat tabs can be active before the legacy target is initialized.
       app.target = undefined;
-      const point = await ui.waitFor(`(() => {const r=document.querySelector('[id$="qq.status.${button}"]')?.getBoundingClientRect();return r?.width?{x:r.x+r.width/2,y:r.y+r.height/2}:null;})()`);
-      await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
-      await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+      await clickDraftAction(ui, button === 'image' ? '图片' : '文件');
       await ui.waitFor(`document.querySelector('.quick-input-widget')?.textContent.includes(${JSON.stringify(title)})`);
       await ui.evaluate(`document.querySelector('.quick-input-widget input').focus()`);
       await ui.call('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
@@ -190,7 +195,7 @@ async function testFileSelection(app: QQApp, backend: MockNapCat, ui: TestUI, ch
     assert.ok(store.draft(key).attachments.some(a => a.kind === 'image'));
     assert.ok(store.draft(key).attachments.some(a => a.kind === 'file'));
     assert.equal(backend.sent.length, sent);
-    checks.push('保留 QQ 标签重启插件后恢复当前会话；清空旧 target 后实际点击图片和文件按钮，打开 VS Code 简易文件框并选入磁盘资源；未覆盖 Windows 原生弹窗');
+    checks.push('保留 QQ 标签重启插件后恢复当前会话；清空旧 target 后实际点击图片和文件文字入口，打开 VS Code 简易文件框并选入磁盘资源；未覆盖 Windows 原生弹窗');
   } finally { await config.update('simpleDialog.enable', previous, vscode.ConfigurationTarget.Global); }
 }
 
@@ -199,7 +204,7 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
   const originalNotifications = config.get('notifications'), originalButtons = config.get('statusBarButtons');
   const statusText = `Array.from(document.querySelectorAll('.statusbar-item')).filter(el=>el.getBoundingClientRect().width>0).map(el=>el.textContent).join('|')`;
   const count = async (n: number) => ui.waitFor(`document.querySelector('[id$="qq.unread"]')?.textContent.trim() === '${n}'`);
-  const buttonVisible = (key: string) => `!!document.querySelector('[id$="qq.status.${key}"]')`;
+  const buttonVisible = (key: string) => `Array.from(document.querySelectorAll('.editor-group-container.active .codelens-decoration a')).some(el=>el.textContent.trim()===${JSON.stringify(({ emojis: '表情', image: '图片', file: '文件', forward: '转发' } as Record<string, string>)[key] ?? key)} && el.getBoundingClientRect().width>0)`;
   const add = (id: number, key: string, body: string) => {
     const message = parseMessage({ ...backend.message(id), message: body }, key, store.selfId);
     store.add(message, true); return message;
@@ -208,14 +213,18 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     assert.deepEqual(config.get('statusBarButtons'), ['emojis', 'image', 'file', 'forward']);
     await app.openChat('group:20002');
     await ui.waitFor(`${buttonVisible('emojis')} && ${buttonVisible('image')} && ${buttonVisible('file')} && ${buttonVisible('forward')}`);
-    assert.equal((app as any).statusButtons.get('image').command.command, 'qq.insertImage');
-    assert.equal((app as any).statusButtons.get('file').command.command, 'qq.insertFile');
-    for (const item of (app as any).statusButtons.values()) assert.match(item.text, /^\$\([a-z-]+\)$/);
-    const icon = await ui.evaluate(`(() => { const el=document.querySelector('[id$="qq.status.image"] .codicon');return el && {name:el.className,content:getComputedStyle(el,'::before').content};})()`);
-    assert.ok(icon.name.includes('qq-picture') && !['none', '""'].includes(icon.content));
+    const lenses = app.editor.provideCodeLenses(vscode.window.activeTextEditor!.document);
+    assert.equal(lenses.find(lens => lens.command?.title === '图片')?.command?.command, 'qq.insertImage');
+    assert.equal(lenses.find(lens => lens.command?.title === '文件')?.command?.command, 'qq.insertFile');
+    await ui.waitFor(`!!document.querySelector('[id$="qq.status.latest"]') && !document.querySelector('[id$="qq.status.emojis"]') && !document.querySelector('[id$="qq.status.image"]')`);
+    const latestPoint = await ui.evaluate(`(() => {const r=document.querySelector('[id$="qq.status.latest"]').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    app.editor.follow(vscode.window.activeTextEditor!, false);
+    await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...latestPoint, button: 'left', clickCount: 1 });
+    await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...latestPoint, button: 'left', clickCount: 1 });
+    await until(() => app.editor.isFollowing(vscode.window.activeTextEditor!));
     const shot = await ui.call('Page.captureScreenshot', { format: 'png' });
     const folder = path.join(__dirname, '..', '..', '.test-output'); await fs.mkdir(folder, { recursive: true });
-    await fs.writeFile(path.join(folder, 'status-icons.png'), Buffer.from(shot.data, 'base64'));
+    await fs.writeFile(path.join(folder, 'draft-actions.png'), Buffer.from(shot.data, 'base64'));
     await vscode.window.showTextDocument(code);
     await ui.waitFor(`!(${buttonVisible('emojis')}) && !(${buttonVisible('image')}) && !(${buttonVisible('file')})`);
     const chatDocument = await vscode.workspace.openTextDocument(app.transcript!.uri(store.chats.get('group:20002')!));
@@ -275,9 +284,7 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     await config.update('statusBarButtons', ['emojis'], vscode.ConfigurationTarget.Global);
     await app.openChat('group:20002');
     const previousDraft = store.draft('group:20002').text, sent = backend.sent.length;
-    const point = await ui.waitFor(`(() => {const el=document.querySelector('[id$="qq.status.emojis"]');const r=el?.getBoundingClientRect();return r?.width?{x:r.x+r.width/2,y:r.y+r.height/2}:null;})()`);
-    await ui.call('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, button: 'left', clickCount: 1 });
-    await ui.call('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, button: 'left', clickCount: 1 });
+    await clickDraftAction(ui, '表情');
     const panel = await ui.webview('#basicFaces');
     await until(async () => await panel.evaluate(`document.querySelectorAll('#basicFaces button').length > 0`));
     await panel.evaluate(`document.getElementById('tabBasic').click();document.querySelector('#basicFaces button').click()`);
@@ -285,7 +292,7 @@ async function testStatusBar(app: QQApp, backend: MockNapCat, ui: TestUI, checks
     assert.ok(store.draft('group:20002').text.startsWith(previousDraft));
     assert.ok(store.draft('group:20002').attachments.some(a => a.kind === 'face'));
     assert.equal(backend.sent.length, sent);
-    checks.push('底栏入口实时增删并支持全部关闭，默认表情入口真实点击后只插入一次草稿并收起，不自动发送');
+    checks.push('草稿入口实时增删并支持全部关闭，底栏置底实际可用；表情链接真实点击后只插入一次草稿并收起，不自动发送');
   } finally {
     await config.update('notifications', originalNotifications, vscode.ConfigurationTarget.Global);
     await config.update('statusBarButtons', originalButtons, vscode.ConfigurationTarget.Global);
