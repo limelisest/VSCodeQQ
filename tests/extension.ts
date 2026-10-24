@@ -18,7 +18,7 @@ import { testPaste } from './pasteExtension';
 import { testPermissions } from './permissionExtension';
 import { testDraftRestore } from './draftRestoreExtension';
 import { testLinkUpdates } from './linkUpdatesExtension';
-import { testListSearch, testListActive, testListAvatars, testListReferences } from './listSearchExtension';
+import { testListSearch, testListActive, testListAvatars, testListReferences, testListEmpty } from './listSearchExtension';
 import { testSlashCommands } from './slashExtension';
 import { testMessageNotifications } from './notificationExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
@@ -112,6 +112,7 @@ export async function run(): Promise<void> {
       await testListSearch(app, ui, checks); await testListActive(app, ui, checks);
       await testListAvatars(app, ui, checks);
       await testListReferences(app, backend, ui, checks);
+      await testListEmpty(app, backend, ui, checks);
       console.log(`QQ list integration: ${checks.length} checks passed`); return;
     }
     if (process.env.QQ_TEST_SETTINGS_ONLY === '1') {
@@ -145,6 +146,8 @@ export async function run(): Promise<void> {
       return;
     }
     assert.equal(app.trees.length, 1);
+    assert.equal(app.trees[0].getChildren('', true).length, 3);
+    await Promise.all(['private:10001', 'group:20001', 'group:20002'].map(key => app!.loadHistory(key)));
     assert.equal(app.trees.find(t => t.section === 'list')?.getChildren().length, 3);
     await vscode.commands.executeCommand('qq.show.list');
     ui = await TestUI.connect();

@@ -1,12 +1,22 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import type { QQApp } from '../src/extension';
+import { newChat } from '../src/model';
 import { MockNapCat, until } from './fixture';
 import { TestUI } from './ui';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+async function closeChatTabs(app: QQApp, keys: string[]): Promise<void> {
+  const tabs = vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputText && keys.includes(app.transcript?.key(tab.input.uri) ?? ''));
+  const documents = vscode.workspace.textDocuments.filter(doc => keys.includes(app.transcript?.key(doc.uri) ?? ''));
+  await until(() => documents.every(doc => !app.native.isUpdating(doc)));
+  for (const doc of documents) if (doc.isDirty) assert.equal(await doc.save(), true);
+  if (tabs.length) await vscode.window.tabGroups.close(tabs, true);
+}
+
 export async function testListSearch(app: QQApp, ui: TestUI, checks: string[]): Promise<void> {
+  await Promise.all(['private:10001', 'group:20001', 'group:20002'].map(key => app.loadHistory(key)));
   await vscode.commands.executeCommand('qq.show.list');
   await vscode.commands.executeCommand('qq.search.list');
   const list = await ui.webview('body[data-section="list"] #search');
@@ -210,7 +220,65 @@ export async function testListReferences(app: QQApp, backend: MockNapCat, ui: Te
     await config.update('notifications', notifications, vscode.ConfigurationTarget.Global);
     await vscode.env.clipboard.writeText(clipboard);
     await app.openChat('private:10001');
+    await closeChatTabs(app, [key, 'group:29992']);
     for (const target of [key, 'group:29992']) { store.drafts.delete(target);store.chats.delete(target);store.messages.delete(target);store.members.delete(target); }
     app.trees[0].refresh();
+  }
+}
+
+export async function testListEmpty(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
+  const store = app.store!, config = vscode.workspace.getConfiguration('qq'), previous = config.get('notifications');
+  const emptyGroup = 'group:29980', emptyBox = 'group:29981', emptyFriend = 'private:10091', cached = 'private:10090';
+  const keys = [emptyGroup, emptyBox, emptyFriend, cached], clock = Math.floor(Date.now()/1000) + 700;
+  await vscode.commands.executeCommand('qq.show.list');
+  const list = await ui.webview('body[data-section="list"] #search');
+  const row = (key: string) => `document.querySelector('[data-key="${key}"]')`;
+  const search = async (query: string) => {
+    await list.evaluate(`(() => {const input=document.getElementById('search');input.value=${JSON.stringify(query)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await until(() => app.trees[0].filter === query);
+  };
+  try {
+    await config.update('notifications', 'off', vscode.ConfigurationTarget.Global);
+    await search('');
+    const folded = await list.evaluate(`document.getElementById('collapsed').textContent`);
+    backend.emptyHistories.add('29980');backend.emptyHistories.add('29981');backend.emptyHistories.add('10091');
+    store.upsert(newChat('group', 29980, '空白群聊'));store.toggleFavorite(emptyGroup);
+    store.upsert(newChat('group', 29981, '空白收纳'));store.toggleCollapsed(emptyBox);
+    store.upsert({ ...newChat('private', 10091, '空白好友'), remark: '空白备注', nickname: '空白昵称' });
+    store.upsert({ ...newChat('private', 10090, '本地历史'), lastTime: clock, preview: '尚未加载的历史摘要' });
+    await until(async () => await list.evaluate(`!!(${row(cached)}) && !(${row(emptyGroup)}) && !(${row(emptyFriend)}) && !(${row(emptyBox)})`));
+    assert.equal(store.messages.has(cached), false, '已知历史未加载时也应保留默认列表');
+    assert.equal(await list.evaluate(`document.getElementById('collapsed').textContent`), folded, '空收纳会话不增加默认收纳数量');
+    assert.ok(!app.trees[0].getChildren().some(chat => [emptyGroup, emptyFriend, emptyBox].includes(chat.key)));
+    for (const [query, key] of [['空白备注', emptyFriend], ['空白昵称', emptyFriend], ['29981', emptyBox], ['空白群聊', emptyGroup]]) {
+      await search(query);await until(async () => await list.evaluate(`!!(${row(key)})`));
+      assert.ok(app.trees[0].getChildren().some(chat => chat.key === key));
+    }
+    await list.evaluate(`${row(emptyGroup)}.querySelector('.name').click()`);
+    await until(() => app.target === emptyGroup && app.trees[0].filter === '');
+    await until(async () => await list.evaluate(`!(${row(emptyGroup)})`));
+    assert.equal(store.messages.get(emptyGroup)!.length, 0, '打开空历史不能生成虚假的消息记录');
+    store.setDraft(emptyGroup, '尚未发送的草稿');
+    assert.equal(store.hasMessages(emptyGroup), false);
+    await search('');
+    assert.equal(await list.evaluate(`!!(${row(emptyGroup)})`), false, '草稿和收藏不让空会话进入默认列表');
+    checks.push('默认隐藏空会话与空收纳会话，保留未加载的已知历史；名称、备注、昵称和号码搜索仍可找到并打开');
+    backend.emit({ ...backend.message(99280, '第一条真实消息'), group_id: 29980, time: clock + 1 });
+    await until(async () => await list.evaluate(`${row(emptyGroup)}?.querySelector('.preview').textContent.endsWith('第一条真实消息')`));
+    assert.equal(store.draft(emptyGroup).text, '尚未发送的草稿');
+    backend.emit({ ...backend.message(99281, '收纳中的第一条消息'), group_id: 29981, time: clock + 2 });
+    await until(async () => await list.evaluate(`document.getElementById('collapsed').textContent.includes('收纳箱 (1)')`));
+    assert.equal(await list.evaluate(`!!(${row(emptyBox)})`), false);
+    await list.evaluate(`document.getElementById('collapsed').click()`);
+    await until(async () => await list.evaluate(`!!(${row(emptyBox)})`));
+    checks.push('收到首条消息后自动进入默认列表并保留草稿；收纳会话出现首条消息后数量和内容同步更新');
+  } finally {
+    await list.evaluate(`document.getElementById('clear').click();if(document.getElementById('collapsed').getAttribute('aria-pressed')==='true')document.getElementById('collapsed').click()`);
+    await app.openChat('private:10001');
+    await closeChatTabs(app, keys);
+    for (const key of keys) { store.chats.delete(key);store.messages.delete(key);store.members.delete(key);store.drafts.delete(key);store.favorites.delete(key);store.collapsed.delete(key); }
+    for (const id of ['29980', '29981', '10091']) backend.emptyHistories.delete(id);
+    app.filterList('list', '');
+    await config.update('notifications', previous, vscode.ConfigurationTarget.Global);
   }
 }

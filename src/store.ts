@@ -90,6 +90,11 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     for (const messages of this.messages.values()) for (const m of messages) { onMessage?.(m); add(m.outgoing?.attachments); add(m.localImages); add(m.localVideos); }
     return refs;
   }
+  hasMessages(key: string): boolean {
+    const chat = this.chats.get(key);
+    // Cached metadata remains authoritative while history is not loaded.
+    return !!chat && (chat.lastTime > 0 || !!chat.preview || chat.unread > 0 || (this.messages.get(key)?.length ?? 0) > 0);
+  }
   upsert(chat: Chat): void {
     chat.name = chatDisplayName(chat.type, chat.id, inline(chat.name));
     const current = this.chats.get(chat.key);

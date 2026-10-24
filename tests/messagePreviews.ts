@@ -72,3 +72,20 @@ test('旧缓存加载后重建摘要，提及原始号码与跨重启回复绑�
     assert.equal(store.chats.get(key)!.preview, '[回复消息]');assert.equal(store.messages.get(key)!.at(-1)!.replyId, '1');
   } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
 });
+
+test('空会话与草稿不算消息，未加载历史仍按缓存时间、摘要或未读保留', async () => {
+  const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'qq-list-presence-')), store = new ChatStore(folder, '123');
+  try {
+    for (const id of [1, 2, 3, 4, 5]) store.upsert(newChat('group', id, '群' + id));
+    store.setDraft('group:1', '尚未发送的草稿');store.toggleFavorite('group:1');
+    assert.equal(store.hasMessages('group:1'), false);
+    store.chats.get('group:2')!.lastTime = 100;
+    store.chats.get('group:3')!.preview = '[图片]';
+    store.chats.get('group:4')!.unread = 1;
+    for (const key of ['group:2', 'group:3', 'group:4']) { assert.equal(store.messages.has(key), false);assert.equal(store.hasMessages(key), true); }
+    store.history('group:5', [parseMessage({ message_id: 1, user_id: 456, time: 0, message: [] }, 'group:5')]);
+    assert.equal(store.hasMessages('group:5'), true, '没有正文或有效时间的真实消息也不能隐藏');
+    store.add(parseMessage({ message_id: 2, user_id: 123, message: '第一条消息' }, 'group:1'), false);
+    assert.equal(store.hasMessages('group:1'), true);
+  } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
+});

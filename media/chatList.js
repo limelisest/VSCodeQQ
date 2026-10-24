@@ -50,10 +50,10 @@ function messageTime(seconds) {
 }
 function render() {
     const focused = results.contains(document.activeElement), scroll = results.scrollTop, terms = input.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
-    const visible = rows.filter(row => terms.every(term => row.search.includes(term)) && (terms.length > 0 || row.collapsed === collapsed));
+    const visible = rows.filter(row => terms.every(term => row.search.includes(term)) && (terms.length > 0 || row.hasMessages && row.collapsed === collapsed));
     const entry = document.getElementById('collapsed');
     if (entry) {
-        const folded = rows.filter(row => row.collapsed), unread = folded.reduce((n, row) => n + row.unread, 0);
+        const folded = rows.filter(row => row.collapsed && row.hasMessages), unread = folded.reduce((n, row) => n + row.unread, 0);
         entry.replaceChildren(boxIcon(), document.createTextNode((collapsed ? '← 返回列表 · ' : '') + '收纳箱 (' + folded.length + ')'));
         if (unread)
             entry.append(unreadBadge(unread, !folded.some(row => row.unread && !row.muted)));
@@ -132,7 +132,7 @@ function render() {
     results.scrollTop = scroll;
     if (focused)
         [...results.children].find(row => row.dataset.key === selected)?.focus({ preventScroll: true });
-    document.getElementById('empty').textContent = visible.length ? '' : input.value.trim() ? '没有匹配的会话' : collapsed ? '收纳箱为空' : account ? '暂无会话' : '请在下方设置中连接 OneBot 服务';
+    document.getElementById('empty').textContent = visible.length ? '' : input.value.trim() ? '没有匹配的会话' : collapsed ? '收纳箱暂无消息' : account ? '暂无消息记录，可搜索好友或群聊' : '请在下方设置中连接 OneBot 服务';
     document.getElementById('count').textContent = input.value.trim() ? visible.length + ' 个结果' : '';
 }
 function revealActive() { [...results.children].find(row => row.dataset.key === active)?.scrollIntoView({ block: 'nearest' }); }

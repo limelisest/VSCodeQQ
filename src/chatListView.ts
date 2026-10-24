@@ -53,7 +53,7 @@ export class ChatListView implements vscode.WebviewViewProvider, vscode.Disposab
     const showAvatars = config.get('showAvatars', true);
     const rows = this.tree.getChildren('', true).map(chat => ({
       key: chat.key, name: chat.name, id: chat.id, kind: chat.type,
-      system: !!systemChatName(chat.type, chat.id), lastTime: chat.lastTime,
+      system: !!systemChatName(chat.type, chat.id), lastTime: chat.lastTime, hasMessages: !!store?.hasMessages(chat.key),
       avatar: showAvatars && /^\d+$/.test(chat.id) && !systemChatName(chat.type, chat.id) ? chat.type === 'group'
         ? `https://p.qlogo.cn/gh/${chat.id}/${chat.id}/100` : `https://q1.qlogo.cn/g?b=qq&nk=${chat.id}&s=100` : undefined,
       search: `${chat.name} ${chat.remark ?? ''} ${chat.nickname ?? ''} ${chat.id}`.toLocaleLowerCase(),

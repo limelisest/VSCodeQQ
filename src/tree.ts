@@ -14,12 +14,12 @@ export class ChatTree implements vscode.Disposable {
   refresh(): void {
     if (!this.timer) this.timer = setTimeout(() => { this.timer = undefined; this.emitter.fire(undefined); }, 150);
   }
-  getChildren(filter = this.filter, includeCollapsed = false): Chat[] {
+  getChildren(filter = this.filter, includeHidden = false): Chat[] {
     const store = this.getStore(); if (!store) return [];
     const terms = filter.toLocaleLowerCase().split(/\s+/).filter(Boolean);
     return [...store.chats.values()].filter(chat => {
       if (!terms.every(term => `${chat.name} ${chat.remark ?? ''} ${chat.nickname ?? ''} ${chat.id}`.toLocaleLowerCase().includes(term))) return false;
-      return includeCollapsed || terms.length > 0 || !store.collapsed.has(chat.key);
+      return includeHidden || terms.length > 0 || store.hasMessages(chat.key) && !store.collapsed.has(chat.key);
     }).sort((a,b) => Number(store.favorites.has(b.key)) - Number(store.favorites.has(a.key)) || Number(b.unread > 0 && allowsUnread(b)) - Number(a.unread > 0 && allowsUnread(a)) || b.lastTime - a.lastTime || a.name.localeCompare(b.name, 'zh-CN'));
   }
   getTreeItem(chat: Chat): vscode.TreeItem {

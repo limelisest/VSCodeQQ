@@ -48,6 +48,7 @@ export class MockNapCat {
   historyDelay = 0;
   historyDelays = new Map<string, number>();
   historyFailures = new Set<string>();
+  emptyHistories = new Set<string>();
   failSend = false;
   sendFailure?: { retcode: number; message?: string; wording?: string };
   rejectedActions = new Set<string>();
@@ -111,7 +112,7 @@ export class MockNapCat {
           const delay = this.historyDelays.get(chat) ?? this.historyDelay;
           if (delay) await new Promise(resolve => setTimeout(resolve, delay));
           if (this.historyFailures.has(chat)) { respond(null, 'failed'); break; }
-          respond({ messages: [...this.history(), ...this.historyExtra] }); break;
+          respond({ messages: this.emptyHistories.has(chat) ? [] : [...this.history(), ...this.historyExtra] }); break;
         }
         case 'get_image': respond({ url: this.imageUrl }); break;
         case 'fetch_custom_face': {
