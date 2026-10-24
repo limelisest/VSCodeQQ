@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import assert from 'node:assert/strict';
 import type { QQApp } from '../src/extension';
-import { until } from './fixture';
+import { MockNapCat, until } from './fixture';
 import { TestUI } from './ui';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -158,5 +158,59 @@ export async function testListAvatars(app: QQApp, ui: TestUI, checks: string[]):
     await config.update('showAvatars', previous, vscode.ConfigurationTarget.Global);
     await themes.update('colorTheme', previousTheme, vscode.ConfigurationTarget.Global);
     Object.assign(store.chats.get(key)!, original); app.filterList('list', '');
+  }
+}
+
+export async function testListReferences(app: QQApp, backend: MockNapCat, ui: TestUI, checks: string[]): Promise<void> {
+  const store = app.store!, key = 'group:29991', sourceId = 99191, replyId = 99192;
+  const config = vscode.workspace.getConfiguration('qq'), notifications = config.get('notifications');
+  const clipboard = await vscode.env.clipboard.readText(), sent = backend.sent.length;
+  await vscode.commands.executeCommand('qq.show.list');
+  const list = await ui.webview('body[data-section="list"] #search');
+  const clock = Math.floor(Date.now()/1000) + 600;
+  const at = { type: 'at', data: { qq: '10001' } };
+  try {
+    await config.update('notifications', 'off', vscode.ConfigurationTarget.Global);
+    backend.masks.set('29991', 1);
+    backend.masks.set('29992', 1);
+    backend.emit({ ...backend.message(99190), group_id: 29992, time: clock, message: [{ type: 'at', data: { qq: 'all' } }] });
+    await until(async () => await list.evaluate(`document.querySelector('[data-key="group:29992"] .preview')?.textContent.endsWith('@全体成员')`));
+    assert.equal(backend.calls.some(call => call.action === 'get_group_member_list' && String(call.params.group_id) === '29992'), false, '@全体成员已有明确名称，无须获取整群资料');
+
+    backend.emit({ ...backend.message(sourceId), group_id: 29991, time: clock, message: [at, { type: 'text', data: { text: ' 保留文字 @10001' } }] });
+    const preview = (text: string) => `document.querySelector('[data-key="${key}"] .preview')?.textContent.endsWith(${JSON.stringify(text)})`;
+    await until(async () => await list.evaluate(preview('@群名片 保留文字 @10001')));
+    assert.ok(backend.calls.some(call => call.action === 'get_group_member_list' && String(call.params.group_id) === '29991'), '未打开的群聊也按需获取提及名称');
+    store.setMembers(key, [{ user_id: 10001, card: '更新名片' }]);
+    await until(async () => await list.evaluate(preview('@更新名片 保留文字 @10001')));
+    assert.ok((await list.evaluate(`document.querySelector('[data-key="${key}"]').title`)).includes('@更新名片'));
+    backend.emit({ ...backend.message(replyId), group_id: 29991, time: clock + 1, message: [{ type: 'reply', data: { id: String(sourceId) } }, at, { type: 'text', data: { text: ' 回复正文' } }] });
+    await until(async () => await list.evaluate(preview('@更新名片 回复正文')));
+    await app.openChat(key);
+    const editor = vscode.window.activeTextEditor!;
+    await until(() => !app.native.isUpdating(editor.document) && editor.document.getText().split('\n').some(line => line.includes('replay') && line.includes('[@:更新名片]')));
+    const rendered = app.transcript!.rendered.get(key)!;
+    const action = rendered.actions.find(action => action.messageId === String(replyId) && action.kind === 'reply')!;
+    editor.selection = new vscode.Selection(action.line, 0, action.line, 0);
+    await vscode.commands.executeCommand('qq.copyMessage');
+    assert.equal(await vscode.env.clipboard.readText(), '@更新名片 回复正文');
+    const reference = rendered.replyLinks.find(link => link.messageId === String(sourceId))!;
+    const command = app.transcript!.clickCommand(editor.document, new vscode.Position(reference.line, reference.start))!;
+    assert.equal(command.path, 'qq.openReplyOriginal');
+    await vscode.commands.executeCommand(command.path, ...JSON.parse(decodeURIComponent(command.query)));
+    assert.equal(app.transcript!.messageAt(editor.document.uri, editor.selection.active.line)?.id, String(sourceId));
+    store.setReply(key, String(sourceId), '更新名片');await app.native.sync(editor);
+    const region = app.native.region(editor.document)!, hover = await app.native.hover(editor.document, editor.document.positionAt(region.start + 2));
+    assert.ok(hover?.contents.some(content => content instanceof vscode.MarkdownString && content.value.includes('@更新名片') && !content.value.includes('[@:')));
+    assert.equal(store.messages.get(key)!.find(message => message.id === String(sourceId))!.segments[0].type, 'mention');
+    assert.equal(backend.sent.length, sent, '读取、复制与定位引用不会发送消息');
+    checks.push('未打开会话按需解析 @ 名称，成员更新刷新列表和提示；普通 @数字原文保持不变');
+    checks.push('回复正文与原文名称一致，复制不含内部占位符；引用跳转、草稿悬浮及原始提及绑定正常');
+  } finally {
+    await config.update('notifications', notifications, vscode.ConfigurationTarget.Global);
+    await vscode.env.clipboard.writeText(clipboard);
+    await app.openChat('private:10001');
+    for (const target of [key, 'group:29992']) { store.drafts.delete(target);store.chats.delete(target);store.messages.delete(target);store.members.delete(target); }
+    app.trees[0].refresh();
   }
 }

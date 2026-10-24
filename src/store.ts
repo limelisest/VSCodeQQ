@@ -65,6 +65,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       } catch (error: any) { if (error.code !== 'ENOENT') this.emit('storageError', new Error('部分聊天缓存无法读取')); }
       this.trackOutbox(key);
       this.loaded.add(key); this.loading.delete(key);
+      if (this.refreshPreview(key)) this.changed(key, 'chat');
     })();
     this.loading.set(key, task); await task;
   }
@@ -94,12 +95,16 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     const current = this.chats.get(chat.key);
     this.chats.set(chat.key, current ? { ...current, name: chat.name, remark: chat.remark ?? current.remark, nickname: chat.nickname ?? current.nickname } : chat);
     this.changed(chat.key, 'chat');
+    if (chat.type === 'private' && (!current || (['name', 'remark', 'nickname'] as const).some(field => current[field] !== this.chats.get(chat.key)![field]))) {
+      for (const [key, messages] of this.messages) if (key !== chat.key && messages.some(message => message.senderId === chat.id || message.segments.some(segment => segment.type === 'mention' && segment.qq === chat.id))) {
+        this.refreshPreview(key); this.emit('change', key, 'members');
+      }
+    }
   }
   history(key: string, messages: Message[]): void {
     // Older versions discarded card data. Recover those placeholders when the
     // backend returns the original card, while retaining local delivery/recall state.
     const byId = new Map(messages.map(message => [message.id, message]));
-    let refreshedCards = false;
     for (const cached of this.messages.get(key) ?? []) {
       const fresh = byId.get(cached.id);
       if (!fresh || cached.recalled) continue;
@@ -107,7 +112,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
         const replacement = fresh.segments[index];
         if (segment.type === 'text' && ['[卡片]', '[消息]'].includes(segment.text)
           && replacement?.type === 'text' && replacement.card && replacement.text !== '[卡片]') {
-          refreshedCards = true; return replacement;
+          return replacement;
         }
         return segment;
       });
@@ -116,8 +121,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     const own = new Set(combined.filter(m => m.senderId === this.selfId).map(m => m.id));
     for (const m of combined) if (m.replyId && own.has(m.replyId)) m.replyToSelf = true;
     this.messages.set(key, mergeMessages(messages, this.messages.get(key) ?? [], this.limit));
-    const latest = this.messages.get(key)?.at(-1);
-    if (refreshedCards && latest) this.updatePreview(latest);
+    this.refreshPreview(key);
     this.trackOutbox(key); this.dirty.add(key); this.changed(key);
   }
   setMembers(key: string, data: any[]): void {
@@ -126,24 +130,30 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
       id: id(m.user_id), name: inline(m.card || m.nickname || m.user_id), title: inline(m.title), nickname: inline(m.nickname),
       role: ['owner', 'admin', 'member'].includes(m.role) ? m.role : 'member'
     });
-    this.members.set(key, members); this.emit('change', key, 'members');
+    this.members.set(key, members);
+    if (this.refreshPreview(key)) this.schedule();
+    this.emit('change', key, 'members');
+  }
+  displayMessage(message: Message): Message {
+    const member = this.members.get(message.chatKey)?.get(message.senderId);
+    let name = (member?.name !== message.senderId ? member?.name : undefined) || message.senderName;
+    const friend = message.senderId !== this.selfId && this.chats.get(`private:${message.senderId}`);
+    if (friend && message.chatKey.startsWith('private:')) name = friend.name;
+    const segments = message.segments.map(segment => {
+      if (segment.type !== 'mention') return segment;
+      const member = this.members.get(message.chatKey)?.get(segment.qq);
+      const friend = this.chats.get(`private:${segment.qq}`);
+      const displayName = (member?.name !== segment.qq ? member?.name : undefined)
+        || (segment.name !== segment.qq ? segment.name : undefined) || friend?.remark || friend?.nickname || friend?.name || segment.qq;
+      return { ...segment, name: segment.qq === 'all' ? '全体成员' : displayName, text: mentionText(segment.qq === 'all' ? '全体成员' : displayName) };
+    });
+    return { ...message, segments, senderName: name, senderRemark: friend ? friend.remark : undefined, senderNickname: member?.nickname || message.senderNickname || (friend ? friend.nickname : undefined), senderTitle: member?.title || message.senderTitle, senderRole: member?.role || message.senderRole };
   }
   displayMessages(key: string): Message[] {
-    return (this.messages.get(key) ?? []).map(message => {
-      const member = this.members.get(key)?.get(message.senderId);
-      let name = member?.name || message.senderName;
-      const friend = message.senderId !== this.selfId && this.chats.get(`private:${message.senderId}`);
-      if (friend && key.startsWith('private:')) name = friend.name;
-      const segments = message.segments.map(segment => {
-        if (segment.type !== 'mention') return segment;
-        const member = this.members.get(key)?.get(segment.qq);
-        const friend = this.chats.get(`private:${segment.qq}`);
-        const displayName = (member?.name !== segment.qq ? member?.name : undefined)
-          || segment.name || friend?.remark || friend?.nickname || friend?.name || segment.qq;
-        return { ...segment, name: segment.qq === 'all' ? '全体成员' : displayName, text: mentionText(segment.qq === 'all' ? '全体成员' : displayName) };
-      });
-      return { ...message, segments, senderName: name, senderRemark: friend ? friend.remark : undefined, senderNickname: member?.nickname || message.senderNickname || (friend ? friend.nickname : undefined), senderTitle: member?.title || message.senderTitle, senderRole: member?.role || message.senderRole };
-    });
+    return (this.messages.get(key) ?? []).map(message => this.displayMessage(message));
+  }
+  messagePreview(message: Message): string {
+    return message.recalled ? '[消息已撤回]' : messageText(this.displayMessage(message)) || (message.replyId ? '[回复消息]' : '');
   }
   add(message: Message, countUnread: boolean): boolean {
     const current = this.messages.get(message.chatKey) ?? [];
@@ -153,7 +163,7 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     this.messages.set(message.chatKey, mergeMessages([], [...current, message], this.limit));
     const chat = this.chats.get(message.chatKey);
     if (chat) {
-      if (message.time >= chat.lastTime) { chat.lastTime = message.time; chat.preview = messageText(message).replace(/\s+/g, ' ').slice(0, 100); }
+      if (message.time >= chat.lastTime) this.updatePreview(message);
       if (countUnread && message.senderId !== this.selfId) {
         chat.unread++; chat.mentioned ||= message.mentioned;
         chat.replied ||= message.replyToSelf || !!message.replyId && current.some(m => m.id === message.replyId && m.senderId === this.selfId);
@@ -179,14 +189,21 @@ export class ChatStore extends EventEmitter<{ change: [key: string, kind: StoreC
     const chat = this.chats.get(key);
     if (chat?.unread && !chat.replied) { chat.replied = true; this.changed(key, 'unread'); }
   }
-  private updatePreview(message: Message): void {
+  private refreshPreview(key: string): boolean {
+    const latest = this.messages.get(key)?.at(-1), chat = this.chats.get(key);
+    return !!latest && !!chat && latest.time >= chat.lastTime && this.updatePreview(latest);
+  }
+  private updatePreview(message: Message): boolean {
     const chat = this.chats.get(message.chatKey);
     // Detail/receipt updates can arrive after a newer message in the same second.
     // Only the current last message owns the preview, regardless of equal timestamps.
     if (chat && this.messages.get(message.chatKey)?.at(-1)?.id === message.id) {
+      const previous = chat.preview;
       chat.lastTime = Math.max(chat.lastTime, message.time);
-      chat.preview = message.recalled ? '[消息已撤回]' : messageText(message).replace(/\s+/g, ' ').slice(0, 100);
+      chat.preview = this.messagePreview(message).replace(/\s+/g, ' ').slice(0, 100);
+      return previous !== chat.preview;
     }
+    return false;
   }
   enrichMessage(message: Message, refreshPreview = false): void {
     const messages = this.messages.get(message.chatKey);

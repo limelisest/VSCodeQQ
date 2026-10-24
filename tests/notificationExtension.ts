@@ -76,6 +76,13 @@ export async function testMessageNotifications(app: QQApp, backend: MockNapCat, 
     await until(() => app.transcript?.key(vscode.window.activeTextEditor!.document.uri) === key);
     await vscode.commands.executeCommand('notifications.hideList');
     checks.push('通知整段摘要均可点击，首行与末行文字真实点击都打开绑定会话；正文中的命令样式文本不生成额外入口');
+    await vscode.commands.executeCommand('notifications.clearAll');
+    const groupKey = 'group:20001';
+    const mentioned = parseMessage({ ...backend.message(99182), message: [{ type: 'at', data: { qq: '10001' } }, { type: 'text', data: { text: ' ' + probe + '-mention' } }] }, groupKey, store.selfId);
+    store.add(mentioned, true);await (app as any).notifyMessage(store, mentioned);
+    await ui.waitFor(`document.querySelector('.notifications-toasts')?.textContent.includes(${JSON.stringify('群名片：@群名片 ' + probe + '-mention')})`);
+    assert.equal(await ui.evaluate(`(${selector}).querySelector('.notification-list-item-message').textContent.includes('[@:')`), false);
+    checks.push('群消息通知使用解析后的发送人及 @名称，不暴露内部提及占位符');
     await config.update('notifications', 'off', vscode.ConfigurationTarget.Global);
     await ui.waitFor(`!(${selector})`);
     checks.push('通知查看链接仅打开当前账号会话；关闭弹窗配置立即移除本扩展已有通知');

@@ -64,7 +64,7 @@ test('旧 v2 缓存的 @ 和文件迁移为明确消息类型，普通 @ 文本�
     await store.restore(); await store.load(chat.key);
     assert.deepEqual(store.messages.get(chat.key)![0].segments.map(s => s.type), ['mention', 'text', 'file']);
     store.setMembers(chat.key, [{ user_id: 789, card: '名片' }]);
-    assert.equal(messageText(store.displayMessages(chat.key)[0]), '[@:名片] @789 [文件:a.txt]');
+    assert.equal(messageText(store.displayMessages(chat.key)[0]), '@名片 @789 [文件:a.txt]');
     store.history(chat.key, []); await store.flush();
     const persisted = JSON.parse(await fs.readFile(path.join(folder, 'group-1.json'), 'utf8'));
     assert.equal(persisted[0].segments[0].qq, '789');

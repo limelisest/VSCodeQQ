@@ -172,7 +172,7 @@ export function parseMessage(raw: any, key?: string, selfId = ''): Message {
   }
   return result;
 }
-export const messageText = (message: Message): string => message.segments.map(s => s.type === 'image' ? '[图片]' : s.text).join('');
+export const messageText = (message: Message): string => message.segments.map(s => s.type === 'image' ? '[图片]' : s.type === 'mention' ? `@${s.qq === 'all' ? '全体成员' : s.name || s.qq}` : s.text).join('');
 export const isPending = (m: Message): boolean => (!!m.outgoing || !!m.forwardDelivery) && !['sent', 'cancelled'].includes(m.sendState ?? '');
 export function mergeMessages(history: Message[], live: Message[], limit: number): Message[] {
   const values = new Map<string, Message>();

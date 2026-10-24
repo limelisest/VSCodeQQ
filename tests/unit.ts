@@ -1,3 +1,4 @@
+import './messagePreviews';
 import './notificationPreview';
 import './historyEdits';
 import './attention';
@@ -494,20 +495,20 @@ test('真实 @ 按群名片/昵称显示，成员更新刷新引用，普通数�
     store.add(parseMessage({ message_id: 11, user_id: 123, message: [
       { type: 'reply', data: { id: 10 } }, { type: 'text', data: { text: '回复' } }
     ] }, chat.key, '123'), false);
-    assert.ok(messageText(store.displayMessages(chat.key)[0]).startsWith('[@:789]'));
+    assert.ok(messageText(store.displayMessages(chat.key)[0]).startsWith('@789'));
     store.setMembers(chat.key, [{ user_id: 789, card: '群名片', nickname: '昵称' }]);
-    assert.equal(messageText(store.displayMessages(chat.key)[0]), '[@:群名片] @789 [@:全体成员][@:服务端昵称]');
+    assert.equal(messageText(store.displayMessages(chat.key)[0]), '@群名片 @789 @全体成员@服务端昵称');
     const rendered = renderTranscript(chat, store.displayMessages(chat.key), '123');
     assert.ok(rendered.text.split('\n').some(l => l.includes('replay') && l.includes('[@:群名片]')));
     assert.equal(messageText(message), raw);
     store.setMembers(chat.key, [{ user_id: 789, nickname: '新昵称' }]);
-    assert.ok(messageText(store.displayMessages(chat.key)[0]).startsWith('[@:新昵称]'));
+    assert.ok(messageText(store.displayMessages(chat.key)[0]).startsWith('@新昵称'));
     await store.flush();
     const restored = new ChatStore(folder, '123');
     try {
       await restored.restore(); await restored.load(chat.key);
       restored.setMembers(chat.key, [{ user_id: 789, card: '恢复名片' }]);
-      assert.ok(messageText(restored.displayMessages(chat.key)[0]).startsWith('[@:恢复名片]'));
+      assert.ok(messageText(restored.displayMessages(chat.key)[0]).startsWith('@恢复名片'));
     } finally { await restored.dispose(); }
   } finally { await store.dispose(); await fs.rm(folder, { recursive: true, force: true }); }
 });

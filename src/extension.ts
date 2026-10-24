@@ -405,8 +405,8 @@ export class QQApp implements vscode.Disposable {
         if (store !== this.store) return;
         this.editor.refreshAttention();
         if (kind === 'messages' || kind === 'members' || kind === 'chat') this.native.schedule(key, true);
+        this.trees.forEach(tree => tree.refresh());
         if (kind !== 'members') {
-          this.trees.forEach(tree => tree.refresh());
           const chat = store.chats.get(key); if (chat) this.tabChanges.fire(transcript.uri(chat));
           this.tabs.refresh();
         }
@@ -467,6 +467,7 @@ export class QQApp implements vscode.Disposable {
         if (local) { store.settleOutgoing(message.chatKey, local.id, { ...local, ...message }); return; }
       }
       const added = store.add(message, true);
+      if (added && message.segments.some(segment => segment.type === 'mention' && segment.qq !== 'all')) void this.loadMembers(message.chatKey);
       if (added && message.senderId !== store.selfId) void this.notifyMessage(store, message);
       void this.notifications?.ensure(message.chatKey);
     } catch { this.output.appendLine('跳过一条无法识别的消息事件。'); }
@@ -507,6 +508,7 @@ export class QQApp implements vscode.Disposable {
   private async notifyMessage(store: ChatStore, message: Message): Promise<void> {
     const key = message.chatKey;
     await this.profiles?.ensure(key);
+    if (message.segments.some(segment => segment.type === 'mention' && segment.qq !== 'all')) await this.loadMembers(key);
     const replyToSelf = await this.resolveReply(store, message).catch(() => false);
     if (store === this.store && replyToSelf) store.markReplyToSelf(key);
     await this.notifications?.ensure(key);
@@ -515,8 +517,7 @@ export class QQApp implements vscode.Disposable {
     if (!message.mentioned && !replyToSelf && this.isReading(key)) return;
     const mode = vscode.workspace.getConfiguration('qq').get<string>('notifications', 'all');
     if (mode === 'off' || (mode === 'mentions' && !message.mentioned && !replyToSelf)) return;
-    const sender = store.displayMessages(key).find(item => item.id === message.id)?.senderName || message.senderName;
-    this.messageNotifications.show(store.selfId, key, notificationPreview(sender, messageText(message)));
+    this.messageNotifications.show(store.selfId, key, notificationPreview(store.displayMessage(message).senderName, store.messagePreview(message)));
   }
   async openChat(input: string | Chat | { account: string; key: string }): Promise<void> {
     const key = typeof input === 'string' ? input : input.key;
@@ -577,6 +578,7 @@ export class QQApp implements vscode.Disposable {
       }
     }
     store.history(key, messages);
+    if (messages.some(message => message.segments.some(segment => segment.type === 'mention' && segment.qq !== 'all'))) void this.loadMembers(key);
     // Resolve missing originals in bounded batches; do not block editor opening.
     void (async () => {
       for (let i = 0; i < messages.length; i += 4) {
@@ -925,7 +927,7 @@ export class QQApp implements vscode.Disposable {
       const editor = vscode.window.activeTextEditor;
       if (editor && !this.native.historyMatches(editor.document)) throw new Error('历史已在本地修改，请先重建聊天文档再复制原文');
       const msg = editor && this.transcript?.messageAt(editor.document.uri, editor.selection.active.line);
-      if (msg) await vscode.env.clipboard.writeText(messageText(msg));
+      if (msg && this.store) await vscode.env.clipboard.writeText(messageText(this.store.displayMessage(msg)));
     });
     register('qq.downloadFile', async (uri: string, messageId: string, fileIndex: number) => {
       const store = this.store, key = this.transcript?.key(vscode.Uri.parse(uri));
