@@ -117,6 +117,8 @@ test('运行时设置定义与扩展注册一致，全部校验通过后才生�
   }
   assert.throws(() => validateChatSettings({ historyCount: 50, cacheRetentionDays: 0 }));
   assert.throws(() => validateChatSettings({ codeLanguage: 'invalid' }));
+  for (const value of ['false', 0, null, []]) assert.throws(() => validateChatSettings({ showAvatars: value }));
+  for (const value of [true, false]) assert.deepEqual(validateChatSettings({ showAvatars: value }), [['showAvatars', value]]);
   for (const value of ['emojis', ['invalid'], ['emojis', 'emojis'], [1]]) assert.throws(() => validateChatSettings({ statusBarButtons: value }));
   assert.deepEqual(validateChatSettings({ statusBarButtons: [] }), [['statusBarButtons', []]]);
   assert.deepEqual(validateChatSettings({ cacheRetentionDays: 7, replyColor: '#123456' }), [['cacheRetentionDays', 7], ['replyColor', '#123456']]);

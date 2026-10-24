@@ -18,7 +18,7 @@ import { testPaste } from './pasteExtension';
 import { testPermissions } from './permissionExtension';
 import { testDraftRestore } from './draftRestoreExtension';
 import { testLinkUpdates } from './linkUpdatesExtension';
-import { testListSearch, testListActive } from './listSearchExtension';
+import { testListSearch, testListActive, testListAvatars } from './listSearchExtension';
 import { testSlashCommands } from './slashExtension';
 import { testMessageNotifications } from './notificationExtension';
 import { testEmojiShortcuts } from './emojiCompletionExtension';
@@ -105,6 +105,13 @@ export async function run(): Promise<void> {
       await testEmojiOpenModes(app, backend, ui, checks);
       await testEmojiOrder(app, backend, ui, checks);
       console.log(`QQ emoji integration: ${checks.length} checks passed`); return;
+    }
+    if (process.env.QQ_TEST_LIST_ONLY === '1') {
+      ui = await TestUI.connect(); await ui.call('Page.bringToFront');
+      await ui.call('Emulation.setFocusEmulationEnabled', { enabled: true });
+      await testListSearch(app, ui, checks); await testListActive(app, ui, checks);
+      await testListAvatars(app, ui, checks);
+      console.log(`QQ list integration: ${checks.length} checks passed`); return;
     }
     if (process.env.QQ_TEST_SETTINGS_ONLY === '1') {
       ui = await TestUI.connect(); await ui.call('Page.bringToFront');

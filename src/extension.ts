@@ -107,6 +107,7 @@ export class QQApp implements vscode.Disposable {
         this.settingsTree.refresh();
         if (e.affectsConfiguration('qq.notifications') && vscode.workspace.getConfiguration('qq').get('notifications') === 'off') this.messageNotifications.clear();
         if (e.affectsConfiguration('qq.statusBarButtons')) this.editor.refreshAttention();
+        if (e.affectsConfiguration('qq.showAvatars')) this.trees.forEach(tree => tree.refresh());
         if (Object.keys(reminderColors).some(key => e.affectsConfiguration('qq.' + key))) { this.editor.refreshHighlights(); void syncReminderColors().catch(error => this.log(error)); this.trees.forEach(tree => tree.refresh()); this.tabs.refresh(); }
         if (this.store) this.store.limit = this.config.messageLimit;
         for (const editor of vscode.window.visibleTextEditors) this.editor.decorate(editor);

@@ -20,6 +20,7 @@ export const chatSettings = {
   messageLimit: { type: 'number', default: 500, minimum: 50, maximum: 2000 },
   notifications: { type: 'string', default: 'all', enum: ['all', 'mentions', 'off'] },
   emojiOrder: { type: 'string', default: 'original', enum: ['original', 'reverse'] },
+  showAvatars: { type: 'boolean', default: true },
   statusBarButtons: { type: 'array', default: ['emojis', 'image', 'file', 'forward'], items: { type: 'string', enum: Object.keys(draftActions) }, uniqueItems: true },
   cacheRetentionDays: { type: 'number', default: 7, minimum: 1, maximum: 90 },
   mentionColor: { type: 'string', default: '#E5A030', pattern: '^#[0-9a-fA-F]{6}$' },
@@ -29,7 +30,7 @@ export const chatSettings = {
 export type ChatSetting = keyof typeof chatSettings;
 export const settingsPages = {
   connection: [],
-  appearance: ['codeLanguage', 'emojiOrder', 'statusBarButtons', ...Object.keys(reminderColors) as (keyof typeof reminderColors)[]],
+  appearance: ['codeLanguage', 'showAvatars', 'emojiOrder', 'statusBarButtons', ...Object.keys(reminderColors) as (keyof typeof reminderColors)[]],
   config: ['historyCount', 'messageLimit', 'notifications'],
   cache: ['cacheRetentionDays']
 } satisfies Record<string, ChatSetting[]>;
@@ -42,7 +43,9 @@ export function validateChatSettings(input: Record<string, unknown>): [ChatSetti
   for (const key of Object.keys(chatSettings) as ChatSetting[]) {
     const value = input[key], definition = chatSettings[key];
     if (value === undefined) continue;
-    if ('items' in definition) {
+    if (definition.type === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error(`${key} 必须为开关值`);
+    } else if ('items' in definition) {
       if (!Array.isArray(value) || value.some(item => typeof item !== 'string' || !definition.items.enum.includes(item)) || new Set(value).size !== value.length) throw new Error('草稿入口选项无效');
     } else if ('minimum' in definition) {
       if (typeof value !== 'number' || !Number.isInteger(value) || value < definition.minimum || value > definition.maximum) throw new Error(`${key} 必须为 ${definition.minimum}～${definition.maximum} 的整数`);
